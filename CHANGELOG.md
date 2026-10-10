@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.0-beta.11](https://github.com/MVTTSUN/glassify/compare/v1.0.0-beta.10...v1.0.0-beta.11) (2026-10-10)
+
+
+### Features
+
+* Karaoke's light voice model, made on the iPhone, and a Voice model choice ([afd7967](https://github.com/MVTTSUN/glassify/commit/afd7967f103069076fe43fde321ec5c5f4ce3ecc))
+
 ## [1.0.0-beta.10](https://github.com/My-Name-Is-Jeff/vitrine/compare/v1.0.0-beta.9...v1.0.0-beta.10) (2026-10-10)
 
 
