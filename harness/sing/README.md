@@ -2,6 +2,13 @@
 
 Three parts: the separator and the engine on the Mac, Sing end to end in the simulator, and the mic button.
 
+The light model has a check of its own (`light/`): `light/build.sh` builds `tweak/Sources/Shared/Sing/SGSingLight.m` for
+the Mac, and `build/light <separator-ane.mlmodelc> <out> <reference>` makes the light model from the full one as the
+iPhone does, stops one conversion a third of the way in, and compares every file of a conversion from scratch byte for
+byte with `light/repalettize.py`'s (`python3 -I light/repalettize.py <separator-ane.mlmodelc> <reference>`); with `load`
+it then loads the light model alone on the Neural Engine through `SGSingLoader.m`, separates a window, and checks the
+fall back to the CPU alone when that copy is past its deadline.
+
 ## The separator and the engine on the Mac (`main.m`)
 
 Sing's loader, separator and engine (`tweak/Sources/Shared/Sing/SGSingLoader.m`, `SGSingSeparator.m`,

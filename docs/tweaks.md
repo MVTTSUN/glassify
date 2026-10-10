@@ -274,6 +274,15 @@ Shared:
                   before is kept and loaded on the CPU alone until this one is in (the Voice model row then reads
                   Update available), and deleted as its download ends or at a launch that finds both
                   (SGSingRemoveOldModel, which logs the space freed), Sing moving to the new one at its next load;
+                  a light model made from it on the iPhone (SGSingLight.m, harness/sing/light/repalettize.py in C and
+                  checked byte for byte against it by harness/sing/light/build.sh: each 64-value table cut to 16 by
+                  numpy's own weighted k-means, uint4 indices, 152 MB of weights, in a few seconds on a utility queue
+                  through a staging folder, stoppable, from scratch each time; Make the light model, or Light chosen with
+                  the full model in), loaded as one Neural Engine copy with no CPU copy (SGSingLoaderWantAlone; the CPU
+                  alone if that fails); Voice model (spotifyglass.sing.voiceModel: Auto, Full, Light) picks which runs as
+                  Karaoke starts, Auto the light one where it is made and the iPhone has under 8 GB, under 1.5 GB left
+                  to the process or is at Serious, and keeps it while it is loaded; either model can be deleted once
+                  both are in, and the Karaoke page's In use row says which runs where;
                   loaded only while Spotify
                   is active (SGSingLoader.m), on any iPhone with iOS 18, a CPU copy first and warmed, only with 1 GB left to the
                   process (no floor on the iPhone's memory: both copies warm add 0.1 GB of footprint), then on Automatic, where the iPhone has a

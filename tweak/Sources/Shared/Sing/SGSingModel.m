@@ -12,11 +12,21 @@
 // at launch or as its download ends, the old one is deleted (SGSingRemoveOldModel); what its own download left goes at
 // launch either way.
 //
-// Threading: main thread, but for SGSingRemoveOldModel; the session's delegate runs on a queue of its own and hands
-// back to the main thread.
+// The light model (SGSingLight.m) is made from this one into separator-light.mlmodelc beside it, through a staging folder
+// (light-staging.mlmodelc) moved into place once it is whole, on a serial utility queue that its deletes go through too,
+// so a delete never lands under a conversion's move. Once made, each model can be deleted without the other. Voice model
+// picks which runs (SGSingModelURL); its row is in SingSettings.m.
+//
+// Threading: main thread, but for SGSingRemoveOldModel; the session's delegate and the light model's queue run on their
+// own and hand back to the main thread.
 #import <CommonCrypto/CommonDigest.h>
+#import <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+#import <os/proc.h>
+#endif
 #import "Core/SGCore.h"
 #import "Sing.h"
+#import "SGSingLight.h"
 
 static NSString *const kRepo = @"https://huggingface.co/My-Name-Is-Jeff/vitrine-sing/resolve/main/separator-ane.mlmodelc/";
 static const int kRetries = 3;
@@ -74,6 +84,14 @@ static NSURL *oldFolder(void) {
     return [singFolder() URLByAppendingPathComponent:@"separator.mlmodelc" isDirectory:YES];
 }
 
+static NSURL *lightFolder(void) {
+    return [singFolder() URLByAppendingPathComponent:@"separator-light.mlmodelc" isDirectory:YES];
+}
+
+static NSURL *lightStaging(void) {
+    return [singFolder() URLByAppendingPathComponent:@"light-staging.mlmodelc" isDirectory:YES];
+}
+
 static NSURL *stagingFolder(void) {
     return [singFolder() URLByAppendingPathComponent:@"download-ane" isDirectory:YES];
 }
@@ -102,6 +120,13 @@ static BOOL complete(NSURL *folder) {
 
 static BOOL oldComplete(void) {
     return completeWith(oldFolder(), kOldFiles, sizeof kOldFiles / sizeof kOldFiles[0]);
+}
+
+// The light model's files at the sizes its conversion makes: the three copied as the full model has them.
+static BOOL lightComplete(void) {
+    NSURL *folder = lightFolder();
+    return completeWith(folder, kFiles, 3) && sizeOf([folder URLByAppendingPathComponent:@"model.mil"]) == kSGSingLightMILBytes
+           && sizeOf([folder URLByAppendingPathComponent:@"weights/weight.bin"]) == kSGSingLightWeightBytes;
 }
 
 // The file's SHA-256, read a megabyte at a time: the weights are too big to read whole.
@@ -240,6 +265,7 @@ static BOOL sg_checking;            // the weights' checksum is being read
         // The update in: the old model goes now, and Sing.x loads this one the next time it wants the model.
         if (!error) SGSingRemoveOldModel();
         sg_modelGeneration++;
+        if (!error) SGSingMakeLightModelIfChosen();
         announce();
     });
 }
@@ -338,40 +364,110 @@ static BOOL sg_checking;            // the weights' checksum is being read
 
 #pragma mark - what Sing asks
 
-SGSingModelState SGSingModelCurrentState(void) {
-    // The old model works on while its update downloads.
-    if (sg_downloader && !SGSingModelUpdateAvailable()) return SGSingModelDownloading;
-    return SGSingModelURL() ? SGSingModelReady : SGSingModelMissing;
+static long long lightBytes(void);
+
+// What is on the iPhone, checked by size once a launch, and again after a download, a conversion or a delete changes it.
+static BOOL sg_fullKnown, sg_oldKnown, sg_lightKnown;
+static NSURL *sg_dev;
+
+static void readModels(void) {
+    static NSUInteger knownGeneration = NSUIntegerMax;
+    if (knownGeneration == sg_modelGeneration) return;
+    knownGeneration = sg_modelGeneration;
+    sg_fullKnown = complete(modelFolder());
+    sg_oldKnown = oldComplete();
+    sg_lightKnown = lightComplete();
+    // FLEX builds only (Diagnostics' SGIsDebugBuild, which the harnesses do not link): a copy put in Sing/dev/ by
+    // hand, for a model not on Hugging Face yet, neither downloaded nor checked. Core ML crashes the process on a
+    // compiled model with a file missing (model.mil, weights/weight.bin; a short file fails cleanly), so a copy
+    // cut off halfway is not loaded.
+    NSURL *folder = [[singFolder() URLByAppendingPathComponent:@"dev" isDirectory:YES] URLByAppendingPathComponent:@"separator-ane.mlmodelc" isDirectory:YES];
+    int present = 0;
+    for (int i = 0; i < kFileCount; i++) present += sizeOf([folder URLByAppendingPathComponent:kFiles[i].path]) > 0;
+    BOOL there = present == kFileCount, flex = NSClassFromString(@"FLEXManager") != nil;
+    if (there && flex && !sg_dev) SGLog(@"sing: DEV MODEL: the voice model is the unchecked copy in %@, not a download (a FLEX build)", folder.path);
+    if (there && !flex) SGLog(@"sing: a dev model is in %@, and only a FLEX build loads it", folder.path);
+    if (present && !there) SGLog(@"sing: the dev model in %@ has %d of its %d files, so it is not loaded", folder.path, present, kFileCount);
+    sg_dev = there && flex ? folder : nil;
+}
+
+NSArray<NSString *> *SGSingVoiceModelNames(void) {
+    return @[@"Auto", @"Full", @"Light"];
+}
+
+SGSingVoiceModel SGSingVoiceModelChoice(void) {
+    NSInteger choice = [NSUserDefaults.standardUserDefaults integerForKey:SGKeySingVoiceModel];
+    return choice == SGSingVoiceModelFull || choice == SGSingVoiceModelLight ? choice : SGSingVoiceModelAuto;
+}
+
+// Auto's lines. NSProcessInfo counts an 8 GB iPhone's memory a little under 8 GB and a 6 GB one's about 6, so 7 GB
+// splits them. The full model wants 1 GB left to the process for its CPU copy and 0.5 GB more for its Neural Engine copy
+// (SGSingLoader.m), the light one only the 0.5 GB.
+static const unsigned long long kAutoMemory = 7000ull * 1000 * 1000;
+static const unsigned long long kAutoRoom = 1500ull * 1000 * 1000;
+
+NSString *SGSingAutoLightReason(void) {
+    unsigned long long memory = NSProcessInfo.processInfo.physicalMemory;
+    if (memory && memory < kAutoMemory) return [NSString stringWithFormat:@"the iPhone has %.1f GB of memory", memory / 1e9];
+#if TARGET_OS_IPHONE
+    unsigned long long left = os_proc_available_memory();
+    if (left && left < kAutoRoom) return [NSString stringWithFormat:@"%.2f GB is left to Spotify", left / 1e9];
+#endif
+    if (NSProcessInfo.processInfo.thermalState >= NSProcessInfoThermalStateSerious) return @"the iPhone is hot";
+    return nil;
+}
+
+// The models Voice model lets Karaoke run, the one it picks now first: Full or Light the one chosen, or the other while
+// it is the only one in; Auto both, the light one first where SGSingAutoLightReason says; the old model where neither is.
+static NSArray<NSURL *> *allowedModels(void) {
+    readModels();
+    if (sg_dev) return @[sg_dev];
+    NSMutableArray<NSURL *> *models = [NSMutableArray array];
+    if (sg_fullKnown) [models addObject:modelFolder()];
+    if (sg_lightKnown) [models addObject:lightFolder()];
+    SGSingVoiceModel choice = SGSingVoiceModelChoice();
+    BOOL lightFirst = choice == SGSingVoiceModelLight || (choice == SGSingVoiceModelAuto && SGSingAutoLightReason());
+    if (lightFirst && models.count == 2) [models exchangeObjectAtIndex:0 withObjectAtIndex:1];
+    if (choice != SGSingVoiceModelAuto && models.count == 2) [models removeLastObject];
+    if (!models.count && sg_oldKnown) [models addObject:oldFolder()];
+    return models;
 }
 
 NSURL *SGSingModelURL(void) {
-    // Checked by size once a launch, and again after a download or a delete changes it.
-    static int known = -1, oldKnown = -1;
-    static NSURL *dev;
-    static NSUInteger knownGeneration = NSUIntegerMax;
-    if (knownGeneration != sg_modelGeneration) {
-        knownGeneration = sg_modelGeneration;
-        known = complete(modelFolder());
-        oldKnown = oldComplete();
-        // FLEX builds only (Diagnostics' SGIsDebugBuild, which the harnesses do not link): a copy put in Sing/dev/ by
-        // hand, for a model not on Hugging Face yet, neither downloaded nor checked. Core ML crashes the process on a
-        // compiled model with a file missing (model.mil, weights/weight.bin; a short file fails cleanly), so a copy
-        // cut off halfway is not loaded.
-        NSURL *folder = [[singFolder() URLByAppendingPathComponent:@"dev" isDirectory:YES] URLByAppendingPathComponent:@"separator-ane.mlmodelc" isDirectory:YES];
-        int present = 0;
-        for (int i = 0; i < kFileCount; i++) present += sizeOf([folder URLByAppendingPathComponent:kFiles[i].path]) > 0;
-        BOOL there = present == kFileCount, flex = NSClassFromString(@"FLEXManager") != nil;
-        if (there && flex && !dev) SGLog(@"sing: DEV MODEL: the voice model is the unchecked copy in %@, not a download (a FLEX build)", folder.path);
-        if (there && !flex) SGLog(@"sing: a dev model is in %@, and only a FLEX build loads it", folder.path);
-        if (present && !there) SGLog(@"sing: the dev model in %@ has %d of its %d files, so it is not loaded", folder.path, present, kFileCount);
-        dev = there && flex ? folder : nil;
-    }
-    return dev ?: known ? modelFolder() : oldKnown ? oldFolder() : nil;
+    return allowedModels().firstObject;
+}
+
+BOOL SGSingModelAllows(NSURL *url) {
+    return url && [allowedModels() containsObject:url];
+}
+
+BOOL SGSingModelIsLight(NSURL *url) {
+    return [url.lastPathComponent isEqualToString:lightFolder().lastPathComponent];
+}
+
+NSString *SGSingModelName(NSURL *url) {
+    readModels();
+    if (SGSingModelIsLight(url)) return @"Light model";
+    if ([url isEqual:oldFolder()]) return @"Old model";
+    if (sg_dev && [url isEqual:sg_dev]) return @"Dev model";
+    return @"Full model";
+}
+
+SGSingModelState SGSingModelCurrentState(void) {
+    // The old model works on while its update downloads, and the light one while the full one does.
+    if (sg_downloader && !SGSingModelURL()) return SGSingModelDownloading;
+    return SGSingModelURL() ? SGSingModelReady : SGSingModelMissing;
 }
 
 // This model in place, the dev copy or the download: nothing to download.
 static BOOL hasModel(void) {
-    return SGSingModelURL() && !SGSingModelUpdateAvailable();
+    readModels();
+    return sg_dev || sg_fullKnown;
+}
+
+SGSingModelState SGSingFullModelState(void) {
+    if (sg_downloader) return SGSingModelDownloading;
+    return hasModel() ? SGSingModelReady : SGSingModelMissing;
 }
 
 double SGSingModelProgress(void) {
@@ -456,6 +552,7 @@ void SGSingCancelModelDownload(void) {
 }
 
 void SGSingDeleteModel(void) {
+    SGSingCancelLightModel();
     SGSingCancelModelDownload();
     [NSFileManager.defaultManager removeItemAtURL:singFolder() error:nil];
     [NSUserDefaults.standardUserDefaults removeObjectForKey:kPausedKey];
@@ -475,6 +572,22 @@ static BOOL removeAll(NSArray<NSURL *> *urls, long long *freed) {
         [files removeItemAtURL:url error:nil];
     }
     return found;
+}
+
+void SGSingDeleteFullModel(void) {
+    // The light model being made reads it.
+    SGSingCancelLightModel();
+    SGSingCancelModelDownload();
+    NSMutableArray<NSURL *> *urls = [NSMutableArray arrayWithObjects:modelFolder(), stagingFolder(), oldFolder(), nil];
+    for (int i = 0; i < kFileCount; i++) [urls addObject:resumeFile(i)];
+    long long freed = 0;
+    removeAll(urls, &freed);
+    [NSUserDefaults.standardUserDefaults removeObjectForKey:kPausedKey];
+    sg_modelGeneration++;
+    readModels();
+    SGLog(@"sing: the full voice model is deleted, %@ freed%@", [NSByteCountFormatter stringFromByteCount:freed countStyle:NSByteCountFormatterCountStyleFile],
+          sg_lightKnown ? @"; the light model is kept" : @"");
+    announce();
 }
 
 void SGSingRemoveOldModel(void) {
@@ -520,4 +633,158 @@ NSArray<NSString *> *SGSingComputeUnitNames(void) {
 BOOL SGSingOSSupported(void) {
     if (@available(iOS 18.0, *)) return YES;
     return NO;
+}
+
+#pragma mark - the light model
+
+// One conversion, stopped by the flag the converter reads between blobs.
+@interface SGSingLightMaker : NSObject
+@property (atomic) BOOL stopped;
+@end
+
+@implementation SGSingLightMaker
+@end
+
+static SGSingLightMaker *sg_lightMaker;   // while one runs
+static double sg_lightProgress;
+static NSString *sg_lightError;
+
+// The conversions and the light model's deletes, one at a time.
+static dispatch_queue_t lightQueue(void) {
+    static dispatch_queue_t queue;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        queue = dispatch_queue_create("spotifyglass.sing.light", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
+    });
+    return queue;
+}
+
+static long long lightBytes(void) {
+    return kFiles[0].size + kFiles[1].size + kFiles[2].size + kSGSingLightMILBytes + kSGSingLightWeightBytes;
+}
+
+SGSingLightState SGSingLightCurrentState(void) {
+    if (sg_lightMaker) return SGSingLightMaking;
+    readModels();
+    if (sg_lightKnown) return SGSingLightReady;
+    return sg_fullKnown ? SGSingLightMissing : SGSingLightNeedsFull;
+}
+
+double SGSingLightProgress(void) {
+    return sg_lightMaker ? sg_lightProgress : SGSingLightCurrentState() == SGSingLightReady ? 1 : 0;
+}
+
+NSString *SGSingLightError(void) {
+    return sg_lightError;
+}
+
+NSString *SGSingLightSizeText(void) {
+    return [NSByteCountFormatter stringFromByteCount:lightBytes() countStyle:NSByteCountFormatterCountStyleFile];
+}
+
+void SGSingMakeLightModel(void) {
+    if (SGSingLightCurrentState() != SGSingLightMissing) return;
+    NSURL *support = singFolder().URLByDeletingLastPathComponent.URLByDeletingLastPathComponent;
+    NSNumber *free = [support resourceValuesForKeys:@[NSURLVolumeAvailableCapacityForImportantUsageKey] error:nil][NSURLVolumeAvailableCapacityForImportantUsageKey];
+    long long wanted = lightBytes() + kSpareSpace;
+    if (free && free.longLongValue < wanted) {
+        NSByteCountFormatterCountStyle style = NSByteCountFormatterCountStyleFile;
+        sg_lightError = [NSString stringWithFormat:@"The iPhone has %@ free, and the light model needs %@ more.",
+                         [NSByteCountFormatter stringFromByteCount:free.longLongValue countStyle:style],
+                         [NSByteCountFormatter stringFromByteCount:wanted - free.longLongValue countStyle:style]];
+        SGLog(@"sing: the light model is not made: %@", sg_lightError);
+        announce();
+        return;
+    }
+    sg_lightError = nil;
+    sg_lightProgress = 0;
+    SGSingLightMaker *maker = [SGSingLightMaker new];
+    sg_lightMaker = maker;
+    // Spotify sent to the background keeps the seconds iOS gives it; past them the conversion stops, and the next one
+    // starts from scratch.
+    UIApplication *app = UIApplication.sharedApplication;
+    __block UIBackgroundTaskIdentifier task = UIBackgroundTaskInvalid;
+    void (^endTask)(void) = ^{
+        if (task != UIBackgroundTaskInvalid) [app endBackgroundTask:task];
+        task = UIBackgroundTaskInvalid;
+    };
+    task = [app beginBackgroundTaskWithName:@"spotifyglass.sing.light" expirationHandler:^{
+        maker.stopped = YES;
+        endTask();
+    }];
+    NSURL *full = modelFolder(), *staging = lightStaging(), *target = lightFolder();
+    SGLog(@"sing: makes the light model from the full one");
+    dispatch_async(lightQueue(), ^{
+        NSFileManager *files = NSFileManager.defaultManager;
+        // What a stopped or cut off conversion left: this one starts from scratch.
+        [files removeItemAtURL:staging error:nil];
+        __block CFAbsoluteTime shown = 0;
+        NSString *sha;
+        NSString *error = SGSingLightConvert(full, staging, ^BOOL(double done) {
+            CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+            if (now - shown >= 0.25 || done >= 1) {
+                shown = now;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (sg_lightMaker != maker) return;
+                    sg_lightProgress = done;
+                    announce();
+                });
+            }
+            return !maker.stopped;
+        }, &sha);
+        if (!error && maker.stopped) error = @"Stopped";
+        if (!error) {
+            NSError *moveError;
+            [files removeItemAtURL:target error:nil];
+            if (![files moveItemAtURL:staging toURL:target error:&moveError]) {
+                error = [NSString stringWithFormat:@"The light model could not be put in place (%@)", moveError.localizedDescription];
+            }
+        }
+        if (error) [files removeItemAtURL:staging error:nil];
+        BOOL stopped = [error isEqualToString:@"Stopped"];
+        if (!error) {
+            SGLog(@"sing: the light model is in place%@", [sha isEqualToString:@(kSGSingLightSHA256)]
+                  ? @", its weights byte for byte the ones checked on the Mac"
+                  : [NSString stringWithFormat:@", but its weights' SHA-256 is %@, not the Mac's %s", sha, kSGSingLightSHA256]);
+        } else {
+            SGLog(@"sing: the light model %@", stopped ? @"was stopped, and what it had written is deleted" : [@"was not made: " stringByAppendingString:error]);
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            endTask();
+            if (sg_lightMaker == maker) sg_lightMaker = nil;
+            if (!stopped) sg_lightError = error;
+            sg_modelGeneration++;
+            announce();
+        });
+    });
+    announce();
+}
+
+void SGSingMakeLightModelIfChosen(void) {
+    if (SGSingVoiceModelChoice() == SGSingVoiceModelLight && SGSingLightCurrentState() == SGSingLightMissing && !sg_lightError) SGSingMakeLightModel();
+}
+
+void SGSingCancelLightModel(void) {
+    if (!sg_lightMaker) return;
+    sg_lightMaker.stopped = YES;
+    sg_lightMaker = nil;
+    sg_lightProgress = 0;
+    announce();
+}
+
+void SGSingDeleteLightModel(void) {
+    SGSingCancelLightModel();
+    NSArray<NSURL *> *urls = @[lightFolder(), lightStaging()];
+    // After a conversion still stopping, which would otherwise move its folder in after this.
+    dispatch_async(lightQueue(), ^{
+        long long freed = 0;
+        if (removeAll(urls, &freed)) {
+            SGLog(@"sing: the light model is deleted, %@ freed", [NSByteCountFormatter stringFromByteCount:freed countStyle:NSByteCountFormatterCountStyleFile]);
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            sg_lightError = nil;
+            sg_modelGeneration++;
+            announce();
+        });
+    });
 }

@@ -7,6 +7,11 @@
 // the Neural Engine (32-46 s on an iPhone 15 Pro, after every install, as an install moves the app's container; then
 // 0.4 s), so it has a deadline of its own; it loads only when the process has the memory left for it.
 //
+// The light model (SGSingLight.h) loads alone on the Neural Engine instead (SGSingLoaderWantAlone): one copy on the CPU and
+// Neural Engine, with the deadline and the room of a Neural Engine copy, which the separator is made with and runs every
+// window on; no CPU copy is loaded beside it. If that copy does not load, warm up or come back in time, the model loads on
+// the CPU alone in its place (SGSingFastFailed or SGSingFastTimedOut says so), as a CPU copy would.
+//
 // Core ML cannot cancel a load, and on an iPhone 15 Pro one has never come back. So each load runs on a queue of its
 // own, has a deadline, and is abandoned when the deadline passes or the model is dropped: abandoned, it is left to
 // finish or hang where it is, and whatever it brings back later is let go. A CPU copy past its deadline makes Sing
@@ -24,7 +29,7 @@ typedef NS_ENUM(NSInteger, SGSingLoaderState) {
     SGSingLoaderFailed,    // the CPU copy did not load (SGSingLoaderError says why); stays so until a retry
 };
 
-// What became of the Neural Engine copy (the "fast" one).
+// What became of the Neural Engine copy (the "fast" one; a model wanted alone, the one the separator is made with).
 typedef NS_ENUM(NSInteger, SGSingFastState) {
     SGSingFastNone,        // none asked for, or not yet started
     SGSingFastLoading,
@@ -40,6 +45,12 @@ void SGSingLoaderSetChanged(void (^changed)(void));
 // without it, any Neural Engine copy is dropped. Another `url` than the last drops the copies of that one (and a
 // Failed) first. Does nothing while Failed. Call it only while Spotify is in the foreground.
 void SGSingLoaderWant(NSURL *url, BOOL neural);
+// Loads the model at `url` as one Neural Engine copy and no CPU copy (the light model), or joins that load; on the CPU
+// alone if the Neural Engine copy fails. A want of the other kind (SGSingLoaderWant) drops this copy first, and this one
+// drops a CPU copy, unless the copy this falls back to is what is there.
+void SGSingLoaderWantAlone(NSURL *url);
+// The copy the separator is made with (loading or loaded) is the Neural Engine's: a model wanted alone.
+BOOL SGSingLoaderMainNeural(void);
 // Compiles the Neural Engine copy of `url` ahead of the mic, with nothing else loaded or loading and the memory for it,
 // then lets it go: Core ML keeps the compiled form. A Neural Engine copy wanted meanwhile takes this load over. `done`
 // runs on the main thread with whether it loaded, unless the copy wanted took it over. NO when it did not start.

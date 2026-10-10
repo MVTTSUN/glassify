@@ -2,8 +2,11 @@
 // (Redesigned/Lyrics/SGRSingButton.m) and the Sing page (Sing on Mod Settings' main page, and Lyrics > Karaoke),
 // under either look: the work is on Spotify's sound.
 //
-//     SGSingModel.m       the voice model: downloaded, each file checked against its size and SHA-256, loaded
-//     SGSingLoader.m      the model in memory: a CPU copy, then a Neural Engine one beside it, each load with a deadline
+//     SGSingModel.m       the voice model: downloaded, each file checked against its size and SHA-256, loaded; the
+//                         light model made from it, and which of the two runs
+//     SGSingLight.m       the light model: the full one's 6-bit palettes cut to 4 bits on the iPhone
+//     SGSingLoader.m      the model in memory: a CPU copy, then a Neural Engine one beside it, each load with a deadline;
+//                         the light model one Neural Engine copy alone
 //     SGSingSeparator.m   the STFT around the model: two seconds in, their vocals out, on the faster copy in
 //     SGSingEngine.m      Spotify's mixer pulled ahead of what plays, the vocals separated in the lead, mixed down
 //                         and put where spatial voice holds them
@@ -22,6 +25,12 @@
 // attention per head, an RMSNorm that divides by the row's largest value first so half precision does not overflow),
 // palettized to 6 bits. Every operation runs on the Neural Engine, and the CPU runs it too, more slowly. Its floor is
 // iOS 18, the Core ML it was built with. No audio leaves the phone.
+//
+// The light model is Glassify's own and has no server: SGSingLight.m makes it on the iPhone from the full model, each
+// weight's table of 64 values cut to 16 (4 bits) and the graph left as it is, 152 MB against 209 MB of weights, with
+// slightly coarser vocals. It loads as one Neural Engine copy with no CPU copy beside it, so it takes about half the
+// memory, and Voice model picks it (Auto, Full, Light). Either model can be kept without the other once the light one
+// is made.
 //
 // Threading: main thread, but for what Sing.x's render side and the engine say.
 #import <UIKit/UIKit.h>
@@ -49,6 +58,11 @@ extern NSNotificationName const SGSingButtonDidChangeNotification;
 // Compiles the Neural Engine copy in the background after an install or an iOS update, with the mic off; on unless
 // switched off.
 #define SGKeySingPrepareAhead @"spotifyglass.sing.prepareAhead"
+// Which voice model Karaoke runs, an index into SGSingVoiceModelNames(): Auto (0, until another is chosen) runs the light
+// model, when it is made, on an iPhone with less than 8 GB of memory, or when the process has little memory left or the
+// iPhone is hot (thermal state Serious up) as Karaoke starts, and the full one otherwise; Full (1) and Light (2) run that
+// one, and the other only while it is the one on the iPhone. Light chosen with the full model in makes the light one.
+#define SGKeySingVoiceModel @"spotifyglass.sing.voiceModel"
 // Spatial voice: through headphones that track the head, the vocals stay in front as it turns; off until
 // switched on, and at once.
 #define SGKeySingSpatial @"spotifyglass.sing.spatial"
@@ -127,6 +141,11 @@ void SGSetSingSpatialSound(double meters, double roomPercent, double frontSecond
 UIViewController *SGSpatialVoiceSettingsPage(void);
 // Runs on changed: the Neural Engine copy loaded or dropped as it now says, the CPU's kept.
 void SGSingComputeUnitsChanged(void);
+// Voice model changed (stored by its row): the light model made if Light wants it, and the model in memory replaced
+// when it is not one the choice runs.
+void SGSingVoiceModelChanged(void);
+// Which model runs and where, for the Karaoke page: "Light model on the Neural Engine", "Full model on the CPU", ...
+NSString *SGSingModelInUseText(void);
 // What the main page's Sing row reads out: On, Off, or how far the model has come.
 NSString *SGSingSummary(void);
 UIViewController *SGSingSettingsPage(void);
@@ -135,8 +154,10 @@ UIViewController *SGSingSettingsPage(void);
 
 typedef NS_ENUM(NSInteger, SGSingModelState) {
     SGSingModelMissing,
-    SGSingModelDownloading,   // with no model to run meanwhile (the old one runs on through its update's download)
-    SGSingModelReady,         // on the phone, every file checked: this model, or the old one until its update is in
+    SGSingModelDownloading,   // with no model to run meanwhile (the old one runs on through its update's download, the
+                              // light one through the full one's)
+    SGSingModelReady,         // on the phone, every file checked: this model, the light one, or the old one until its
+                              // update is in
 };
 SGSingModelState SGSingModelCurrentState(void);
 // 0 to 1 while downloading.
@@ -158,8 +179,9 @@ NSString *SGSingModelSizeText(void);
 void SGSingDownloadModel(void);
 void SGSingCancelModelDownload(void);
 void SGSingDeleteModel(void);
-// The compiled model's folder: separator-ane.mlmodelc once it is downloaded and checked, else the old model
-// (separator.mlmodelc) where it is still on the iPhone, else nil. On a FLEX build a copy put in Application
+// The compiled model's folder Karaoke would load now: the one Voice model picks (Auto deciding at this moment) of
+// separator-ane.mlmodelc once it is downloaded and checked and separator-light.mlmodelc once it is made, else the old
+// model (separator.mlmodelc) where it is still on the iPhone, else nil. On a FLEX build a copy put in Application
 // Support/Vitrine/Sing/dev/ by hand comes first, unchecked.
 NSURL *SGSingModelURL(void);
 // The model is the old one: it runs on the CPU alone, and the download is its update.
@@ -172,5 +194,50 @@ NSString *SGSingModelInUseSizeText(void);
 // is in, logging the space freed; from any thread, at launch and as the download ends.
 void SGSingRemoveOldModel(void);
 NSArray<NSString *> *SGSingComputeUnitNames(void);
+// The full model alone, whatever the light one: Downloading while its download runs, Ready once it (or a FLEX build's
+// dev copy) is on the iPhone, Missing with only the old model.
+SGSingModelState SGSingFullModelState(void);
+// Deletes the full model, the old one and what a download kept, the light model left; stops the light model being made.
+void SGSingDeleteFullModel(void);
+
+typedef NS_ENUM(NSInteger, SGSingVoiceModel) {
+    SGSingVoiceModelAuto,
+    SGSingVoiceModelFull,
+    SGSingVoiceModelLight,
+};
+NSArray<NSString *> *SGSingVoiceModelNames(void);
+SGSingVoiceModel SGSingVoiceModelChoice(void);
+// Why Auto would run the light model now (the memory, what is left of it, the heat), nil when it would run the full one.
+NSString *SGSingAutoLightReason(void);
+// Whether `url` is the light model's folder.
+BOOL SGSingModelIsLight(NSURL *url);
+// "Light model", "Full model", "Old model" or "Dev model", for the page and the log.
+NSString *SGSingModelName(NSURL *url);
+// Whether `url` is a model on the iPhone that Voice model lets Karaoke run now: a model loaded under Auto stays while it is
+// there, whichever Auto would pick next.
+BOOL SGSingModelAllows(NSURL *url);
+
+// The light model (SGSingLight.m), made on the iPhone from the full one.
+typedef NS_ENUM(NSInteger, SGSingLightState) {
+    SGSingLightNeedsFull,   // not made, and the full model it is made from is not on the iPhone
+    SGSingLightMissing,     // not made, the full model in: it can be
+    SGSingLightMaking,
+    SGSingLightReady,
+};
+SGSingLightState SGSingLightCurrentState(void);
+// 0 to 1 while it is made.
+double SGSingLightProgress(void);
+// Why the last one was not made, nil when it was or was stopped.
+NSString *SGSingLightError(void);
+// Its size on the iPhone, about 152 MB.
+NSString *SGSingLightSizeText(void);
+// Makes it on a utility queue from the full model, into a staging folder moved into place when it is whole; a stop or a
+// closed app leaves nothing, and the next one starts from scratch.
+void SGSingMakeLightModel(void);
+// Makes it when Light is chosen and the full model is in: as Light is chosen, as the full model's download ends, and
+// when Spotify comes to the front (a conversion cut off by a closed app).
+void SGSingMakeLightModelIfChosen(void);
+void SGSingCancelLightModel(void);
+void SGSingDeleteLightModel(void);
 // Whether this OS can load the model (iOS 18). Memory is checked as the model loads (SGSingLoader.m).
 BOOL SGSingOSSupported(void);

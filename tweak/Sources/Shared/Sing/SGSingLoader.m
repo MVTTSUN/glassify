@@ -47,6 +47,9 @@ static SGSingFastState sg_fastState;
 static BOOL sg_foreground;
 static NSUInteger sg_keepToken;                 // counts the mic's releases and wants, so a stale minute drops nothing
 static BOOL sg_wanted;                          // the mic is on: the Neural Engine copy is worth loading
+static BOOL sg_alone;                           // the model is wanted as one Neural Engine copy (the light model)
+static BOOL sg_aloneFell;                       // that copy failed for this model: it is on the CPU alone
+static BOOL sg_mainNeural;                      // the copy the separator is made with, loading or loaded, is the Neural Engine's
 
 // Run after the caller returns, so a listener that wants or purges again does not run inside it.
 static void changed(void) {
@@ -128,6 +131,8 @@ static SGSingLoad *startLoad(NSURL *url, BOOL neural, double deadline, void (^do
 }
 
 static SGSingLoad *sg_prepareLoad;   // SGSingLoaderPrepareNeural's, until it comes back or is taken over
+static void mainLoaded(MLModel *model, NSError *error);
+static void mainLate(void);
 
 static void fastLoaded(MLModel *model) {
     sg_fastLoad = nil;
@@ -170,50 +175,89 @@ static void startFast(void) {
 BOOL SGSingLoaderPrepareNeural(NSURL *url, void (^done)(BOOL loaded)) {
     if (!url || sg_outstanding || sg_state != SGSingLoaderIdle || !sg_foreground || !roomFor(kNeuralRoom)) return NO;
     __block SGSingLoad *load = startLoad(url, YES, SGSingLoaderNeuralDeadline, ^(MLModel *model, NSError *error) {
-        BOOL taken = sg_fastLoad == load;
+        BOOL taken = sg_fastLoad == load, main = sg_cpuLoad == load;
         sg_prepareLoad = nil;
-        if (taken) fastLoaded(model);
+        if (main) mainLoaded(model, error);
+        else if (taken) fastLoaded(model);
         else if (done) done(model != nil);
     }, ^{
-        BOOL taken = sg_fastLoad == load;
+        BOOL taken = sg_fastLoad == load, main = sg_cpuLoad == load;
         sg_prepareLoad = nil;
-        if (taken) fastLate();
+        if (main) mainLate();
+        else if (taken) fastLate();
         else if (done) done(NO);
     });
     sg_prepareLoad = load;
     return YES;
 }
 
+// The copy the separator is made with: the CPU's, or a model wanted alone's Neural Engine copy (which takes over the compile
+// running ahead of the mic, as startFast does) until it has failed.
 static void startCPU(void) {
-    if (!roomFor(sg_outstanding ? kCopyRoom : kFirstRoom)) {
+    BOOL neural = sg_alone && !sg_aloneFell;
+    unsigned long long room = sg_outstanding ? kCopyRoom : neural ? kNeuralRoom : kFirstRoom;
+    if (!roomFor(room)) {
         sg_state = SGSingLoaderFailed;
         sg_error = sg_outstanding
             ? [NSString stringWithFormat:@"A load abandoned earlier still holds memory, and %@. Close Spotify and open it again to load the voice model.", memoryText()]
-            : [NSString stringWithFormat:@"iOS leaves Spotify too little memory for the voice model: %@, and it needs %.1f GB. Closing Spotify and opening it again can free some.", memoryText(), kFirstRoom / 1e9];
+            : [NSString stringWithFormat:@"iOS leaves Spotify too little memory for the voice model: %@, and it needs %.1f GB. Closing Spotify and opening it again can free some.", memoryText(), room / 1e9];
         SGLog(@"sing: no new load: %@", sg_error);
         changed();
         return;
     }
     sg_state = SGSingLoaderLoading;
     sg_error = nil;
-    sg_cpuLoad = startLoad(sg_url, NO, SGSingLoaderCPUDeadline, ^(MLModel *model, NSError *error) {
-        sg_cpuLoad = nil;
-        sg_separator = model ? [[SGSingSeparator alloc] initWithModel:model] : nil;
-        if (sg_separator) {
-            sg_state = SGSingLoaderReady;
-        } else {
-            sg_state = SGSingLoaderFailed;
-            sg_error = model ? @"Karaoke could not set aside memory for the voice model."
-                             : [NSString stringWithFormat:@"The voice model did not load: %@", error.localizedDescription ?: @"Core ML gave no reason."];
-        }
-        changed();
-        startFast();
-    }, ^{
-        sg_cpuLoad = nil;
+    sg_mainNeural = neural;
+    if (neural) sg_fastState = SGSingFastLoading;
+    if (neural && sg_prepareLoad && [sg_prepareLoad.url isEqual:sg_url] && !sg_prepareLoad.finished && !sg_prepareLoad.abandoned) {
+        sg_cpuLoad = sg_prepareLoad;
+        SGLog(@"sing: the Neural Engine copy is the one already compiling (load %u), and no CPU copy loads beside it", sg_cpuLoad.number);
+    } else {
+        sg_cpuLoad = startLoad(sg_url, neural, neural ? SGSingLoaderNeuralDeadline : SGSingLoaderCPUDeadline, ^(MLModel *model, NSError *error) {
+            mainLoaded(model, error);
+        }, ^{
+            mainLate();
+        });
+    }
+    changed();
+}
+
+// A model wanted alone whose Neural Engine copy failed: on the CPU alone from here, for this model.
+static void aloneFell(SGSingFastState state, NSString *why) {
+    sg_aloneFell = YES;
+    sg_fastState = state;
+    SGLog(@"sing: the Neural Engine copy of %@ %@, so it loads on the CPU alone", sg_url.lastPathComponent, why);
+    changed();
+    startCPU();
+}
+
+static void mainLoaded(MLModel *model, NSError *error) {
+    sg_cpuLoad = nil;
+    if (!model && sg_mainNeural) {
+        aloneFell(SGSingFastFailed, [NSString stringWithFormat:@"did not load (%@)", error.localizedDescription ?: @"Core ML gave no reason"]);
+        return;
+    }
+    sg_separator = model ? [[SGSingSeparator alloc] initWithModel:model named:sg_mainNeural ? @"Neural Engine" : @"CPU"] : nil;
+    if (sg_separator) {
+        sg_state = SGSingLoaderReady;
+        if (sg_mainNeural) sg_fastState = SGSingFastReady;
+    } else {
         sg_state = SGSingLoaderFailed;
-        sg_error = [NSString stringWithFormat:@"The voice model did not load in %.0f s, so that load was given up.", SGSingLoaderCPUDeadline];
-        changed();
-    });
+        sg_error = model ? @"Karaoke could not set aside memory for the voice model."
+                         : [NSString stringWithFormat:@"The voice model did not load: %@", error.localizedDescription ?: @"Core ML gave no reason."];
+    }
+    changed();
+    startFast();
+}
+
+static void mainLate(void) {
+    sg_cpuLoad = nil;
+    if (sg_mainNeural) {
+        aloneFell(SGSingFastTimedOut, [NSString stringWithFormat:@"did not load in %.0f s", SGSingLoaderNeuralDeadline]);
+        return;
+    }
+    sg_state = SGSingLoaderFailed;
+    sg_error = [NSString stringWithFormat:@"The voice model did not load in %.0f s, so that load was given up.", SGSingLoaderCPUDeadline];
     changed();
 }
 
@@ -236,20 +280,38 @@ void SGSingLoaderDropFast(NSString *why) {
     changed();
 }
 
-void SGSingLoaderWant(NSURL *url, BOOL neural) {
-    // Another model (its update in): the copies of the one before go, a failure with them, and this one loads.
-    if (sg_url && url && ![url isEqual:sg_url]) {
-        SGSingLoaderPurge([NSString stringWithFormat:@"the model is now %@", url.lastPathComponent]);
+static void want(NSURL *url, BOOL neural, BOOL alone) {
+    // Another model (its update in, or the light one for the full): the copies of the one before go, a failure with
+    // them, and this one loads. So do they for the same model wanted as the other kind of copy, unless a model wanted
+    // alone already fell back to the CPU copy now wanted.
+    BOOL another = sg_url && url && ![url isEqual:sg_url];
+    BOOL otherCopy = !another && sg_state != SGSingLoaderIdle && sg_state != SGSingLoaderFailed && sg_mainNeural != (alone && !sg_aloneFell);
+    if (another || otherCopy) {
+        SGSingLoaderPurge(another ? [NSString stringWithFormat:@"the model is now %@", url.lastPathComponent]
+                                  : alone ? @"it now loads on the Neural Engine alone" : @"it now loads on the CPU first");
         sg_state = SGSingLoaderIdle;
         sg_error = nil;
     }
     sg_keepToken++;
     sg_wanted = YES;
     sg_url = url;
-    sg_neural = neural;
-    if (!neural) SGSingLoaderDropFast(@"Karaoke runs on the CPU alone now");
+    sg_alone = alone;
+    sg_neural = neural && !alone;
+    if (!neural && !alone) SGSingLoaderDropFast(@"Karaoke runs on the CPU alone now");
     if (sg_state == SGSingLoaderIdle) startCPU();
     else startFast();
+}
+
+void SGSingLoaderWant(NSURL *url, BOOL neural) {
+    want(url, neural, NO);
+}
+
+void SGSingLoaderWantAlone(NSURL *url) {
+    want(url, NO, YES);
+}
+
+BOOL SGSingLoaderMainNeural(void) {
+    return sg_state != SGSingLoaderIdle && sg_state != SGSingLoaderFailed && sg_mainNeural;
 }
 
 void SGSingLoaderPurge(NSString *why) {
@@ -260,6 +322,8 @@ void SGSingLoaderPurge(NSString *why) {
     sg_cpuLoad = nil;
     SGSingLoaderDropFast(nil);
     sg_separator = nil;
+    sg_mainNeural = NO;
+    sg_aloneFell = NO;
     if (!had) return;
     sg_state = SGSingLoaderIdle;
     SGLog(@"sing: the voice model is dropped: %@", why);
@@ -312,7 +376,8 @@ SGSingFastState SGSingLoaderFastState(void) {
 }
 
 NSTimeInterval SGSingLoaderFastSeconds(void) {
-    return sg_fastLoad ? CFAbsoluteTimeGetCurrent() - sg_fastLoad.began : 0;
+    SGSingLoad *load = sg_fastLoad ?: sg_mainNeural ? sg_cpuLoad : nil;
+    return load ? CFAbsoluteTimeGetCurrent() - load.began : 0;
 }
 
 unsigned SGSingLoaderAttempts(void) {

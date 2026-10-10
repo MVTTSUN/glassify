@@ -80,6 +80,19 @@ NSString *SGSingModelInUseSizeText(void) { return SGSingModelUpdateAvailable() ?
 void SGSingDownloadModel(void) {}
 void SGSingCancelModelDownload(void) {}
 void SGSingDeleteModel(void) {}
+SGSingModelState SGSingFullModelState(void) { return SGSingModelCurrentState(); }
+void SGSingDeleteFullModel(void) {}
+NSArray<NSString *> *SGSingVoiceModelNames(void) { return @[@"Auto", @"Full", @"Light"]; }
+void SGSingVoiceModelChanged(void) {}
+NSString *SGSingModelInUseText(void) { return SGSingModelCurrentState() == SGSingModelReady ? @"Full model on the Neural Engine" : @"None"; }
+// The light model as made, unless the full one is missing.
+SGSingLightState SGSingLightCurrentState(void) { return SGSingModelCurrentState() == SGSingModelReady ? SGSingLightReady : SGSingLightNeedsFull; }
+double SGSingLightProgress(void) { return 0.42; }
+NSString *SGSingLightError(void) { return nil; }
+NSString *SGSingLightSizeText(void) { return @"153.6 MB"; }
+void SGSingMakeLightModel(void) {}
+void SGSingCancelLightModel(void) {}
+void SGSingDeleteLightModel(void) {}
 NSArray<NSString *> *SGSingComputeUnitNames(void) { return @[@"Automatic", @"CPU only"]; }
 BOOL SGSingOSSupported(void) { return YES; }
 BOOL SGSingDeviceSupported(void) { return YES; }

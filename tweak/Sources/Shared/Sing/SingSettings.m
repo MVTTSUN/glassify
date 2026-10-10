@@ -1,7 +1,8 @@
 // The Sing page (Sing on Mod Settings' main page, and Lyrics > Karaoke), under either look: the card at its top
 // (SGSingCard.m: the song, what Sing is doing, the vocals and the rest traced live, play and pause, the vocals'
 // level and its three stops), Sing's switch, which turns the mic on and off at once, Ignore heat warnings, the voice
-// model and its removal, spatial voice's page (its preview, SGSpatialPreview.m, and its switch), and Runs on under
+// models (Voice model's choice, which one runs, the full model's download, the light one made from it, and either's
+// removal), spatial voice's page (its preview, SGSpatialPreview.m, and its switch), and Runs on under
 // Advanced. While the page is on screen with Spotify in front, the card's reads of its lines keep Sing separating
 // the playing song even at As sung, where it otherwise rests (SGSingReadLevels), so what the card shows and what
 // its slider sets are heard at once; popped, covered or in the background, the page no longer counts.
@@ -46,11 +47,60 @@ static NSString *bytes(long long count) {
     return [NSByteCountFormatter stringFromByteCount:count countStyle:NSByteCountFormatterCountStyleFile];
 }
 
-// The row's state: with the old model, its update reads as the model's download, worded as an update.
+// The full model's row: with the old model, its update reads as the model's download, worded as an update; with the
+// light model alone, the full one reads as not downloaded.
 static SGSingModelState rowState(void) {
-    if (SGSingModelUpdateDownloading()) return SGSingModelDownloading;
-    if (SGSingModelUpdateAvailable()) return SGSingModelMissing;
-    return SGSingModelCurrentState();
+    return SGSingFullModelState();
+}
+
+// Karaoke goes off with the last model, and stays on while the other is there.
+static void deleteFull(UITableViewController *page) {
+    if (SGSingLightCurrentState() != SGSingLightReady) SGSetSingOn(NO);
+    SGSingDeleteFullModel();
+    [page.tableView reloadData];
+}
+
+static void deleteLight(UITableViewController *page) {
+    if (SGSingFullModelState() != SGSingModelReady && !SGSingModelUpdateAvailable()) SGSetSingOn(NO);
+    SGSingDeleteLightModel();
+    [page.tableView reloadData];
+}
+
+static NSString *lightValue(void) {
+    switch (SGSingLightCurrentState()) {
+        case SGSingLightMaking: return [NSString stringWithFormat:@"Making · %.0f%%", SGSingLightProgress() * 100];
+        case SGSingLightReady: return [NSString stringWithFormat:@"Made · %@", SGSingLightSizeText()];
+        case SGSingLightNeedsFull: return @"Needs the full model";
+        case SGSingLightMissing: return SGSingLightError() ? @"Failed, try again" : @"Not made";
+    }
+    return @"";
+}
+
+static void makeLight(void) {
+    ask(@"Make the light model?", [NSString stringWithFormat:@"%@It is made on this iPhone from the full model in about a minute, and takes %@. Its weights are "
+                                   @"4-bit instead of 6-bit: it uses about half the memory and runs on the Neural Engine alone, and its vocals are "
+                                   @"slightly coarser.", SGSingLightError() ? [NSString stringWithFormat:@"The last try failed: %@\n\n", SGSingLightError()] : @"",
+                                   SGSingLightSizeText()], @"Make", NO, ^{ SGSingMakeLightModel(); });
+}
+
+static void lightTapped(UITableViewController *page) {
+    switch (SGSingLightCurrentState()) {
+        case SGSingLightMaking:
+            ask(@"Stop making the light model?", @"What is made so far is deleted, and the next one starts from the beginning.", @"Stop", YES, ^{ SGSingCancelLightModel(); });
+            break;
+        case SGSingLightReady: {
+            ask(@"Delete the light model?", [NSString stringWithFormat:@"It frees %@. It can be made again from the full model.", SGSingLightSizeText()],
+                @"Delete", YES, ^{ deleteLight(page); });
+            break;
+        }
+        case SGSingLightNeedsFull:
+            tell(@"Light model", @"The light model is made on this iPhone from the full one, so the full model is downloaded first. Once the light one "
+                                 @"is made, the full one can be deleted.");
+            break;
+        case SGSingLightMissing:
+            makeLight();
+            break;
+    }
 }
 
 static NSString *modelValue(void) {
@@ -99,12 +149,11 @@ static void modelTapped(UITableViewController *page) {
             ask(@"Stop the download?", @"What has come in is kept, so the next download carries on from it.", @"Stop", YES, ^{ SGSingCancelModelDownload(); });
             break;
         case SGSingModelReady:
-            ask(@"Delete the voice model?", [NSString stringWithFormat:@"It frees %@. Karaoke needs it again to turn the vocals down.", SGSingModelInUseSizeText()],
+            ask(@"Delete the full model?", [NSString stringWithFormat:@"It frees %@. %@", SGSingModelInUseSizeText(), SGSingLightCurrentState() == SGSingLightReady
+                                            ? @"Karaoke runs on the light model." : @"Karaoke needs a voice model to turn the vocals down."],
                 @"Delete", YES, ^{
-                    SGSetSingOn(NO);
-                    SGSingDeleteModel();
-                    // Sing's switch goes off with it.
-                    [page.tableView reloadData];
+                    // Sing's switch goes off with the last model.
+                    deleteFull(page);
                 });
             break;
     }
@@ -210,20 +259,35 @@ UIViewController *SGSingSettingsPage(void) {
                                    SGKeySingIgnoreMemory);
     heat.changed = ^(BOOL on) { SGSetSingIgnoresHeat(on); };
     __block __weak SGModPage *page;
-    SGModRow *model = SGStatActionRow(@"Voice model", nil, ^NSString *{ return modelValue(); }, ^{ modelTapped(page); });
-    SGModRow *remove = SGActionRow(@"Remove voice model", nil, ^{
-        BOOL partial = SGSingModelCurrentState() != SGSingModelReady;
-        ask(partial ? @"Remove the paused download?" : @"Remove the voice model?",
+    SGModRow *voice = SGChoiceRow(@"Voice model", nil, SGKeySingVoiceModel, SGSingVoiceModelNames(), 0);
+    voice.choiceNotes = @[@"The light model where it is made and the iPhone has less than 8 GB of memory, little of it left, or is hot as Karaoke starts; the full one otherwise",
+                          @"The finest vocals: on the CPU first, then on the Neural Engine", @"4-bit weights: about half the memory, on the Neural Engine alone, slightly coarser vocals"];
+    voice.choiceFooter = @"The light model is made on this iPhone from the full one, in about a minute, and choosing Light makes it as soon as the full model "
+                         @"is downloaded. While the model chosen is not on the iPhone, Karaoke runs the other. Once both are in, either can be deleted.";
+    voice.chosen = ^(NSInteger index) { SGSingVoiceModelChanged(); };
+    SGModRow *inUse = SGStatRow(@"In use", ^NSString *{ return SGSingModelInUseText(); });
+    SGModRow *model = SGStatActionRow(@"Full model", nil, ^NSString *{ return modelValue(); }, ^{ modelTapped(page); });
+    SGModRow *light = SGStatActionRow(@"Light model", nil, ^NSString *{ return lightValue(); }, ^{ lightTapped(page); });
+    SGModRow *make = SGActionRow(@"Make the light model", [NSString stringWithFormat:@"≈%@, a minute, from the full model", SGSingLightSizeText()], ^{ makeLight(); });
+    make.visible = ^BOOL { return SGSingOSSupported() && SGSingLightCurrentState() == SGSingLightMissing; };
+    SGModRow *remove = SGActionRow(@"Delete the full model", nil, ^{
+        BOOL partial = SGSingFullModelState() != SGSingModelReady && !SGSingModelUpdateAvailable();
+        ask(partial ? @"Remove the paused download?" : @"Delete the full model?",
             partial ? [NSString stringWithFormat:@"It frees %@. A new download starts from the beginning.", bytes(SGSingModelPausedBytes())]
-                    : [NSString stringWithFormat:@"It frees %@. Karaoke needs it again to turn the vocals down.", SGSingModelInUseSizeText()],
-            @"Remove", YES, ^{
-                SGSetSingOn(NO);
-                SGSingDeleteModel();
-                [page.tableView reloadData];
-            });
+                    : [NSString stringWithFormat:@"It frees %@. %@", SGSingModelInUseSizeText(), SGSingLightCurrentState() == SGSingLightReady
+                       ? @"Karaoke runs on the light model." : @"Karaoke needs a voice model to turn the vocals down."],
+            partial ? @"Remove" : @"Delete", YES, ^{ deleteFull(page); });
     });
     remove.color = SGRed();
-    remove.visible = ^BOOL { return SGSingModelCurrentState() == SGSingModelReady || SGSingModelPausedBytes() > 0; };
+    remove.visible = ^BOOL {
+        return SGSingFullModelState() == SGSingModelReady || SGSingModelUpdateAvailable() || SGSingModelPausedBytes() > 0;
+    };
+    SGModRow *removeLight = SGActionRow(@"Delete the light model", nil, ^{
+        ask(@"Delete the light model?", [NSString stringWithFormat:@"It frees %@. It can be made again from the full model.", SGSingLightSizeText()],
+            @"Delete", YES, ^{ deleteLight(page); });
+    });
+    removeLight.color = SGRed();
+    removeLight.visible = ^BOOL { return SGSingLightCurrentState() == SGSingLightReady; };
     SGModRow *spatial = SGPageRow(@"Spatial voice", ^UIViewController *{ return SGSpatialVoiceSettingsPage(); });
     spatial.subtitle = @"With AirPods, the voice stays in front of you as you turn your head";
     spatial.value = ^NSString *{ return SGSingSpatial() ? @"On" : @"Off"; };
@@ -240,7 +304,10 @@ UIViewController *SGSingSettingsPage(void) {
     SGModRow *prepare = SGSwitchRow(@"Prepare after updates",
                                     @"Readies the Neural Engine in the background after Glassify or iOS updates, so Karaoke starts at full speed", SGKeySingPrepareAhead);
     SGSingPage *made = [[SGSingPage alloc] initWithTitle:@"Karaoke" intro:nil sections:@[
-        SGSection(nil, @[sing, button, heat, memory, model, remove]),
+        SGSection(nil, @[sing, button, heat, memory]),
+        SGNotedSection(@"Voice models", @[voice, inUse, model, light, make, remove, removeLight],
+                       @"The full model is downloaded; the light one is Glassify's 4-bit version of it, made on this iPhone. In use says which "
+                       @"one Karaoke runs and where."),
         SGSection(nil, @[spatial]),
         SGNotedSection(@"Advanced", @[units, prepare],
                        @"Karaoke turns a song's vocals down to sing over, or the rest down to hear the vocals alone, with a voice model that "

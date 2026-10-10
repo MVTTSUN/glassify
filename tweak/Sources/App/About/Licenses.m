@@ -40,7 +40,8 @@ UIViewController *SGLicensesPage(void) {
     SGModRow *eevee = SGLinkRow(@"EeveeSpotify", @"Ads, upsells · GNU GPL v3.0", @"https://www.gnu.org/licenses/gpl-3.0.html");
     // Not shipped: the Headphones page downloads its results when asked, but they are AutoEq's work all the same.
     SGModRow *autoEq = SGLinkRow(@"AutoEq", @"Headphone corrections · MIT License", @"https://github.com/jaakkopasanen/AutoEq");
-    // Sing's voice model is downloaded rather than built in, and its NOTICE travels with it here all the same.
+    // Sing's voice model is downloaded rather than built in, and its NOTICE travels with it here all the same; the light
+    // model is made from it on the iPhone (Shared/Sing/SGSingLight.m), the same work under the same license.
     SGModRow *voice = SGLinkRow(@"Karaoke's voice model", @"Mel-Band RoFormer · MIT License", @"https://huggingface.co/My-Name-Is-Jeff/vitrine-sing");
     return [[SGModPage alloc] initWithTitle:@"Licenses" intro:@"The mod's own license, and the code from others it includes." sections:@[
         SGSection(nil, @[mod]),
@@ -58,6 +59,8 @@ UIViewController *SGLicensesPage(void) {
                                        @"Core ML conversion: john-rocky / mlboydaisuke, https://huggingface.co/mlboydaisuke/MelBandRoformer-Vocal-CoreAI (MIT).\n"
                                        @"Core ML export: Darkkos, https://huggingface.co/Darkkos/spoti-sing (MIT), mirrored unchanged.\n"
                                        @"Neural Engine export, the model Karaoke downloads: Vitrine, from the same checkpoint, palettized to 6 bits.\n"
+                                       @"Light model: Glassify's 4-bit re-palettization of that export (each table of 64 values cut to 16), made on "
+                                       @"this iPhone from the downloaded model when it is chosen, under the same MIT License.\n"
                                        @"Reference architecture: lucidrains/BS-RoFormer. Training code: ZFTurbo.\n\n"
                                        @"Copyright (c) 2023 Phil Wang\n\n" stringByAppendingString:kMIT]),
     ] footer:nil];

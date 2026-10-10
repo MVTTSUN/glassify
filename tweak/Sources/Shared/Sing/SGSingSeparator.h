@@ -12,8 +12,8 @@
 // The vocals come back from the model's complex mask times the spectrum, through the inverse STFT
 // (torch.istft: overlap-add of the windowed frames divided by the window's squared sum).
 //
-// Two copies of the model can stand behind one separator: the CPU's, which it is made with, and a faster one (the
-// Neural Engine's) handed over once it is loaded and warm, which then takes every window, in the background too. A
+// Two copies of the model can stand behind one separator: the one it is made with (the CPU's, or the light model's
+// Neural Engine copy, which then stands alone), and a faster one (the Neural Engine's) handed over once it is loaded and warm, which then takes every window, in the background too. A
 // window the faster copy fails is done again on the CPU's, and the faster copy is not used again until another is
 // handed over (Sing.x drops it for the launch). The first windows on each copy are logged with their time.
 //
@@ -40,15 +40,17 @@ const char *SGSingThermalName(void);
 NSString *SGSingMemoryText(void);
 
 typedef struct {
-    unsigned long long windows[2], fallbacks;   // [0] the CPU's copy, [1] the faster one
+    unsigned long long windows[2], fallbacks;   // [0] the copy it is made with (the CPU's), [1] the faster one
     double averageMS[2];
     bool fast;                                  // the last window went to the faster copy
     bool fastFailed;                            // the faster copy now in failed a window, and is not used again
 } SGSingSeparatorStats;
 
 @interface SGSingSeparator : NSObject
-// Nil `model` makes one that only does the STFT, for the harness.
+// Nil `model` makes one that only does the STFT, for the harness. The copy it is made with is the CPU's, as the log
+// names it, unless `name` says another.
 - (instancetype)initWithModel:(MLModel *)model;
+- (instancetype)initWithModel:(MLModel *)model named:(NSString *)name;
 // The faster copy, already warm, and the name the log gives it; nil takes it away.
 - (void)setFastModel:(MLModel *)model named:(NSString *)name;
 - (SGSingSeparatorStats)stats;

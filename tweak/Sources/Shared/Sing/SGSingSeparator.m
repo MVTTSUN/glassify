@@ -40,6 +40,7 @@ static inline size_t at(int bin, int channel, int frame) {
 
 @implementation SGSingSeparator {
     MLModel *_model;
+    NSString *_modelName;        // the copy it is made with, for the log
     os_unfair_lock _lock;        // the faster copy and its name
     MLModel *_fast;
     NSString *_fastName;
@@ -56,8 +57,13 @@ static inline size_t at(int bin, int channel, int frame) {
 }
 
 - (instancetype)initWithModel:(MLModel *)model {
+    return [self initWithModel:model named:@"CPU"];
+}
+
+- (instancetype)initWithModel:(MLModel *)model named:(NSString *)name {
     if (!(self = [super init])) return nil;
     _model = model;
+    _modelName = name ?: @"CPU";
     _lock = OS_UNFAIR_LOCK_INIT;
     _forward = vDSP_DFT_zrop_CreateSetup(NULL, kSGSingFFT, vDSP_DFT_FORWARD);
     _inverse = vDSP_DFT_zrop_CreateSetup(_forward, kSGSingFFT, vDSP_DFT_INVERSE);
@@ -276,7 +282,7 @@ static BOOL predict(MLModel *model, MLDictionaryFeatureProvider *features, float
     }
     CFAbsoluteTime began = CFAbsoluteTimeGetCurrent();
     if (!predict(_model, features, _vocals, error)) return NO;
-    [self count:0 took:CFAbsoluteTimeGetCurrent() - began named:@"CPU"];
+    [self count:0 took:CFAbsoluteTimeGetCurrent() - began named:_modelName];
     [self synthesize:_vocals left:vocalsLeft right:vocalsRight];
     return YES;
 }
