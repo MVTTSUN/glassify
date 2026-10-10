@@ -3,7 +3,7 @@
 // app looks like (Redesigned UI's switch, Appearance, Tab bar), the screens a page of its own changes
 // (Player, Lyrics, and Albums & artists or, in the native look, Home & Library), the features that work
 // under either look (Sing, Spatial voice, Audio effects, Vibrations, Live Activity, AirPods gestures, Listening stats),
-// the system's side (Lock screen; Premium, ads & privacy), the advanced pages (Labs, All flags, a
+// the system's side (Lock screen; Ads & privacy), the advanced pages (Labs, All flags, a
 // searchable list of every flag with an override per flag) and Mod, the build, its updates and links. The
 // same row leads the side drawer's list (trees/test6.txt), above Your plan, so the page is a tap from
 // Home, and holding Home on the tab bar opens it too. The tweaks read the switches when they run, so a
@@ -102,7 +102,7 @@ static UIViewController *modSettingsPage(void) {
     [sections addObjectsFromArray:@[
         SGSection(nil, @[
             pageRow(@"Lock screen", @"lock", UIColor.systemGrayColor, ^UIViewController *{ return SGLockScreenWidgetPage(); }),
-            pageRow(@"Premium, ads & privacy", @"crown", UIColor.systemBlueColor, ^UIViewController *{ return SGAdsSettingsPage(); }),
+            pageRow(@"Ads & privacy", @"hand.raised", UIColor.systemBlueColor, ^UIViewController *{ return SGAdsSettingsPage(); }),
         ]),
         SGSection(nil, @[
             pageRow(@"Labs", @"testtube.2", UIColor.systemMintColor, ^UIViewController *{ return SGLabsPage(); }),
@@ -110,7 +110,7 @@ static UIViewController *modSettingsPage(void) {
         ]),
         SGSection(nil, @[mod]),
     ]];
-    SGModPage *page = [[SGModPage alloc] initWithTitle:@"Vitrine" intro:nil sections:sections footer:nil];
+    SGModPage *page = [[SGModPage alloc] initWithTitle:@SG_NAME intro:nil sections:sections footer:nil];
     page.tiles = YES;
     return page;
 }

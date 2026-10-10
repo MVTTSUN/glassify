@@ -4,7 +4,8 @@
 //                                  picture run across it (HomeTiles.m)
 //   id=Components.UI.HomeCard      a shelf card, its picture Encore.ImageView 149x149 > UIImageView with no radius
 //                                  of its own (10.txt:2280-2286): cut at the cover radius, continuous, over the
-//                                  4pt Spotify bakes into the picture (an artist's round one sits inside it)
+//                                  4pt Spotify bakes into the picture (an artist's round one sits inside it); in
+//                                  the Top picks shelf a Top picks card instead (HomeTopPickCard.m)
 //   in Discovery_MediumDensityCardKit.DJMDCView   the DJ card 370x192 r=8 that clips (01.txt:477-478): the card
 //                                  radius, and without the transcript Spotify's DJ talks through
 //                                  (Discovery_MediumDensityCardKit.TranscriptView, :500) or the Beta badge (:503)
@@ -56,7 +57,8 @@ static void style(UIView *button) {
         return;
     }
     if ([identifier isEqualToString:@"Components.UI.HomeCard"]) {
-        roundCover(button);
+        // A card of the Top picks shelf has its own face and corners (HomeTopPickCard.m).
+        if (!SGRHomeStyleTopPick(button)) roundCover(button);
         return;
     }
     static Class dj;

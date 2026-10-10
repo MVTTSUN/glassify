@@ -48,6 +48,26 @@ class Binary:
             m = re.match(r'^([0-9a-f]+) [tT] -\[\S+ initWithConfigurationProvider:\]$', line)
             if m:
                 self.thunks.append(int(m.group(1), 16))
+        if not self.thunks:
+            self.thunks = self.objc_imps(path, 'initWithConfigurationProvider:')
+
+    # A stripped binary (EeveeDecrypter's 9.1.90) has no local symbols for nm, so the initializers are
+    # found through the classes' relative method lists instead: otool prints each entry's selector
+    # reference and IMP, and the reference is read back to its name.
+    def objc_imps(self, path, wanted):
+        text = subprocess.run(['otool', '-oV', path], capture_output=True, text=True).stdout
+        imps, ref = [], None
+        for line in text.splitlines():
+            m = re.match(r'\s+name\s+0x[0-9a-f]+ \((0x[0-9a-f]+)\)', line)
+            if m:
+                ref = int(m.group(1), 16)
+                continue
+            m = re.match(r'\s+imp\s+0x[0-9a-f]+ \((0x[0-9a-f]+)\)', line)
+            if m and ref is not None:
+                if self.selector(ref) == wanted:
+                    imps.append(int(m.group(1), 16))
+                ref = None
+        return sorted(set(imps))
 
     def offset(self, addr):
         for vm, off, size in self.segs:

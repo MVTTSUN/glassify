@@ -329,6 +329,10 @@ static void requestOrientations(UIWindowScene *scene, UIInterfaceOrientationMask
     }
 }
 
+BOOL SGRPlayerLandscapeShowing(void) {
+    return sg_window != nil;
+}
+
 void SGRPlayerShowLandscape(BOOL show) {
     UIWindowScene *scene = (UIWindowScene *)UIApplication.sharedApplication.connectedScenes.anyObject;
     if (![scene isKindOfClass:UIWindowScene.class]) return;
@@ -343,6 +347,7 @@ void SGRPlayerShowLandscape(BOOL show) {
         [sg_window makeKeyAndVisible];
         requestOrientations(scene, UIInterfaceOrientationMaskLandscape);
         if (UIInterfaceOrientationIsLandscape(scene.interfaceOrientation)) reveal(sg_window);
+        SGRPlayerVolumeRefresh();
         SGLog(@"redesign player: the lyrics turn sideways");
     } else if (!show && sg_window) {
         UIWindow *window = sg_window;
@@ -364,6 +369,7 @@ void SGRPlayerShowLandscape(BOOL show) {
                 }
             }
         });
+        SGRPlayerVolumeRefresh();
         SGLog(@"redesign player: the lyrics turn back");
     }
 }

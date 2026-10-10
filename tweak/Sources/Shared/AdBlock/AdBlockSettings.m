@@ -3,7 +3,6 @@
 #import "AdBlock.h"
 #import "Shared/Privacy/Privacy.h"
 
-NSString *const SGFakePremiumWarning = @"This is the part of EeveeSpotify Spotify's takedown went after, and it has not been tested here. It can end in a forced logout or worse for the account. A Premium account gains nothing from it.";
 
 // Every switch here forces a flag Spotify ships on to off, so the titles name the blocking: on stops
 // the thing, off is Spotify's own value. Hide ads and Hide upsells already force the first two
@@ -51,9 +50,6 @@ UIViewController *SGAdsSettingsPage(void) {
     })];
     [counts addObject:SGActionRow(@"Reset the counters", nil, ^{ SGResetAdBlock(); })];
 
-    SGModRow *fakePremium = SGOptionRow(@"Spoof Premium", nil, SGKeyFakePremium);
-    fakePremium.warning = SGFakePremiumWarning;
-
     // The redesign's Search keeps only its category cards, so the video carousel switch is the native look's.
     NSMutableArray<SGModRow *> *ads = [NSMutableArray arrayWithObjects:
         SGWithSymbol(SGOptionRow(@"Hide ads", nil, SGKeyHideAds), @"speaker.slash"),
@@ -61,11 +57,8 @@ UIViewController *SGAdsSettingsPage(void) {
     if (!SGRedesignedUIStored()) [ads addObject:SGWithSymbol(SGOptionRow(@"Hide the video carousel in Search", nil, SGKeyHideSearchVideos), @"play.rectangle.on.rectangle")];
     [ads addObject:SGWithSymbol(SGPageRow(@"Ad and upsell flags", ^UIViewController *{ return adFlagsPage(); }), @"flag")];
 
-    return [[SGModPage alloc] initWithTitle:@"Premium, ads & privacy" intro:SGRestartNote sections:@[
-        SGNotedSection(@"Ads", ads, @"Audio ads between songs need Spoof Premium."),
-        SGNotedSection(@"Premium", @[
-            SGWithSymbol(fakePremium, @"crown"),
-        ], @"Free accounts only."),
+    return [[SGModPage alloc] initWithTitle:@"Ads & privacy" intro:SGRestartNote sections:@[
+        SGSection(@"Ads", ads),
         SGPrivacySection(),
         SGNotedSection(@"Ads blocked so far", counts,
                        @"\"3 of 214\" is 3 stopped of 214 checked. 0 of 0 means Spotify never asked, so that part does nothing on this version."),

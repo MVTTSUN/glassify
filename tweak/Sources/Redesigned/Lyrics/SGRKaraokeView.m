@@ -1445,28 +1445,47 @@ typedef struct {
     return _sample ?: SGKaraokeLinesForTrack(track);
 }
 
-- (void)tapped:(UITapGestureRecognizer *)tap {
-    if (_extrasBox && !_extrasBox.hidden && CGRectContainsPoint(_extrasBox.frame, [tap locationInView:self])) return;
-    if (_sing.userInteractionEnabled && [_sing pointInside:[tap locationInView:_sing] withEvent:nil]) return;
+// What a tap at `point` (in the scroll view) reaches, the bubble before the line it is on: the credit
+// (`credit` set, nil returned), a line whose meaning bubble it hit (`bubble` set) or a line to seek to.
+- (SGRKaraokeLineView *)lineForTapAt:(CGPoint)point credit:(BOOL *)credit bubble:(BOOL *)bubble {
+    *credit = *bubble = NO;
     if (_creditLinks.count && !_credit.hidden
-        && CGRectContainsPoint(CGRectInset(_credit.frame, -kCreditSlop, -MAX(kCreditSlop, (44 - _credit.frame.size.height) / 2)),
-                               [tap locationInView:_scroll])) {
-        SGLyricsOpenCreditLinks(_creditLinks, _credit);
-        return;
+        && CGRectContainsPoint(CGRectInset(_credit.frame, -kCreditSlop, -MAX(kCreditSlop, (44 - _credit.frame.size.height) / 2)), point)) {
+        *credit = YES;
+        return nil;
     }
-    CGPoint point = [tap locationInView:_scroll];
     for (SGRKaraokeLineView *view in _shown.allValues) {
         CGRect target = view.bubbleTarget;
         if (CGRectIsNull(target) || !CGRectContainsPoint(target, [_scroll convertPoint:point toView:view])) continue;
-        [self explainLine:view];
-        return;
+        *bubble = YES;
+        return view;
     }
-    if (_plain) return;   // a line with no time has nowhere to seek to
+    if (_plain) return nil;   // a line with no time has nowhere to seek to
     for (SGRKaraokeLineView *view in _shown.allValues) {
-        if (!CGRectContainsPoint(CGRectInset(view.frame, -_margin, -_lineGap / 2), point)) continue;
-        [self seekToLine:view.line];
-        return;
+        if (CGRectContainsPoint(CGRectInset(view.frame, -_margin, -_lineGap / 2), point)) return view;
     }
+    return nil;
+}
+
+// As tapped: reads it, so a tap the lines would drop (on the extras' place, hidden with the host's controls,
+// or on the mic) is the host's.
+- (BOOL)takesTapAt:(CGPoint)point {
+    if (!_lines || self.hidden) return NO;
+    if (_extrasBox && !_extrasBox.hidden && CGRectContainsPoint(_extrasBox.frame, point)) return NO;
+    if (_sing.userInteractionEnabled && [_sing pointInside:[self convertPoint:point toView:_sing] withEvent:nil]) return NO;
+    BOOL credit, bubble;
+    SGRKaraokeLineView *line = [self lineForTapAt:[self convertPoint:point toView:_scroll] credit:&credit bubble:&bubble];
+    return credit || line != nil;
+}
+
+- (void)tapped:(UITapGestureRecognizer *)tap {
+    if (_extrasBox && !_extrasBox.hidden && CGRectContainsPoint(_extrasBox.frame, [tap locationInView:self])) return;
+    if (_sing.userInteractionEnabled && [_sing pointInside:[tap locationInView:_sing] withEvent:nil]) return;
+    BOOL credit, bubble;
+    SGRKaraokeLineView *view = [self lineForTapAt:[tap locationInView:_scroll] credit:&credit bubble:&bubble];
+    if (credit) SGLyricsOpenCreditLinks(_creditLinks, _credit);
+    else if (bubble) [self explainLine:view];
+    else if (view) [self seekToLine:view.line];
 }
 
 // A tap on a line, or VoiceOver activating it.
@@ -1556,6 +1575,10 @@ typedef struct {
 - (void)followSong {
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(followSong) object:nil];
     if (!_browsing) return;
+    // Told while still browsing: a host that resizes the page for it (the player's controls coming back) has
+    // the stack held at the browse anchor through that, and the glide below starts from the new height.
+    if (self.browsingEnded) self.browsingEnded();
+    if (!_browsing) return;   // the host's answer ended it some other way
     _browsing = NO;
     [UIView animateWithDuration:0.7 delay:0 usingSpringWithDamping:0.9 initialSpringVelocity:0
                         options:UIViewAnimationOptionAllowUserInteraction

@@ -699,7 +699,7 @@ NSString *SGSingStatusDetail(void) {
             NSTimeInterval seconds = SGSingLoaderPreparingSeconds();
             if (seconds < 0) return nil;
             return [NSString stringWithFormat:@"After an update, the iPhone prepares the voice model for the Neural Engine once, which takes about a minute. "
-                                              @"Vitrine does it now, in the background, so Karaoke starts at full speed when it is switched on (%.0f s so far).", seconds];
+                                              @"Glassify does it now, in the background, so Karaoke starts at full speed when it is switched on (%.0f s so far).", seconds];
         }
         case SGSingStateWaiting:
             if (sg_resting) {

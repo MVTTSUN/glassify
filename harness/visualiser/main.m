@@ -1,5 +1,5 @@
 // The Visualizer's spectrum (Redesigned/Player/SGRSpectrum.m, as the tweak compiles it) on the Mac: tones and
-// noise handed over in IO buffers of 1024 at an output's rate, the way PlayerVisualiser.x gets them through
+// noise handed over in IO buffers of 1024 at an output's rate, the way PlayerVisualiser.m gets them through
 // AudioEffects.x's reader, and each check printed with ok or WRONG.
 //
 //     ./build.sh && build/spectrum
@@ -100,6 +100,34 @@ int main(void) {
         uint64_t start = feed(0, 0, 48000, 0.01);
         uint64_t end = feed(0, 0, 48000, 1);
         check(end - start >= 45 && end - start <= 48, [NSString stringWithFormat:@"%llu analyses in a second at 48 kHz", end - start]);
+
+        // The shaders' snapshot: 32 bands spaced by (16000/30)^(1/32), so 1 kHz is in band 17; the hop's loudness.
+        SGRSpectrumSnapshot snapshot;
+        feed(1000, 1, 48000, 0.5);
+        SGRSpectrumReadSnapshot(&snapshot);
+        int fineBest = 0;
+        for (int i = 1; i < SGRSpectrumFineBands; i++) if (snapshot.levels[i] > snapshot.levels[fineBest]) fineBest = i;
+        check(fineBest == 17 && fabsf(snapshot.levels[17]) < 1.5f && fabsf(snapshot.rms + 3) < 0.5f,
+              [NSString stringWithFormat:@"snapshot: 1 kHz in band %d (want 17) at %.1f dB, loudness %.1f dB (want -3)",
+               fineBest, snapshot.levels[fineBest], snapshot.rms]);
+
+        // Beats: eight kicks of 60 Hz, 0.1 s on and 0.4 s off, are eight beats; a steady bass after them none.
+        feed(0, 0, 48000, 1);
+        SGRSpectrumReadSnapshot(&snapshot);
+        uint64_t beatsBefore = snapshot.beats;
+        for (int kick = 0; kick < 8; kick++) {
+            feed(60, 0.5f, 48000, 0.1);
+            feed(0, 0, 48000, 0.4);
+        }
+        SGRSpectrumReadSnapshot(&snapshot);
+        uint64_t kicks = snapshot.beats - beatsBefore;
+        check(kicks >= 7 && kicks <= 8, [NSString stringWithFormat:@"%llu beats in eight kicks", kicks]);
+        feed(60, 0.5f, 48000, 1);
+        SGRSpectrumReadSnapshot(&snapshot);
+        beatsBefore = snapshot.beats;
+        feed(60, 0.5f, 48000, 3);
+        SGRSpectrumReadSnapshot(&snapshot);
+        check(snapshot.beats == beatsBefore, [NSString stringWithFormat:@"%llu beats in three seconds of steady bass", snapshot.beats - beatsBefore]);
 
         printf("spectrum checks: %d of %d right -- %s\n", right, checks, right == checks ? "PASS" : "FAIL");
         return right == checks ? 0 : 1;

@@ -34,7 +34,7 @@ static BOOL otherVersion(void) {
 
 static SGProblem eevee(void) {
     return @[@"EeveeSpotify is injected too",
-             @"Vitrine already blocks ads and brings lyrics, and EeveeSpotify hooks the same parts of Spotify. With both, Spotify can freeze as it starts or show the wrong lyrics. Sign Spotify again without EeveeSpotify."];
+             @"Glassify already blocks ads and brings lyrics, and EeveeSpotify hooks the same parts of Spotify. With both, Spotify can freeze as it starts or show the wrong lyrics. Sign Spotify again without EeveeSpotify."];
 }
 
 // "a", "a and b", "a, b and c", with `word` for the last join.
@@ -48,8 +48,8 @@ static SGProblem version(void) {
     NSArray<NSString *> *likely = SGSpotifyLikelyWorksVersions;
     NSString *also = !likely.count ? @""
         : [NSString stringWithFormat:@", and %@ likely %@ too", joined(likely, @"and"), likely.count == 1 ? @"works" : @"work"];
-    return @[[NSString stringWithFormat:@"Spotify %@ is not the version Vitrine is made for", SGSpotifyVersion()],
-             [NSString stringWithFormat:@"Vitrine is made for Spotify %@%@. On another version some of its changes find nothing to change, and some screens can look wrong or crash. Inject Vitrine into Spotify %@.",
+    return @[[NSString stringWithFormat:@"Spotify %@ is not the version Glassify is made for", SGSpotifyVersion()],
+             [NSString stringWithFormat:@"Glassify is made for Spotify %@%@. On another version some of its changes find nothing to change, and some screens can look wrong or crash. Inject Glassify into Spotify %@.",
                  joined(SGSpotifySupportedVersions, @"and"), also,
                  joined([SGSpotifySupportedVersions arrayByAddingObjectsFromArray:likely], @"or")]];
 }
@@ -74,8 +74,8 @@ static BOOL withoutAppChanges(void) {
 }
 
 static SGProblem appChanges(void) {
-    return @[@"Installed without Vitrine's app changes",
-             [NSString stringWithFormat:@"Some of what Vitrine does needs changes to the app that only its IPA build makes. Without them, %@. Build the IPA with Vitrine instead of injecting its .deb.",
+    return @[@"Installed without Glassify's app changes",
+             [NSString stringWithFormat:@"Some of what Glassify does needs changes to the app that only its IPA build makes. Without them, %@. Build the IPA with Glassify instead of injecting its .deb.",
                  joined(missingAppChanges(), @"and")]];
 }
 
@@ -131,7 +131,7 @@ static void offerCleanup(void) {
     if (!leftovers.count) return;
     NSString *size = sizeOf(leftovers);
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"Chroma left %@ on this iPhone", size]
-                                                                  message:@"Its Karaoke voice model and its saved lock screen videos are still in Spotify's storage, and Vitrine uses neither. Your listening history and audio effects stay."
+                                                                  message:@"Its Karaoke voice model and its saved lock screen videos are still in Spotify's storage, and Glassify uses neither. Your listening history and audio effects stay."
                                                            preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"Delete" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
@@ -164,7 +164,7 @@ NSArray<SGModRow *> *SGEnvironmentWarningRows(void) {
     if (withoutAppChanges())
         [rows addObject:SGWarningRow(@"Installed without the app changes", @"Tap for what that does", ^{ tell(@[appChanges()]); })];
     if (chromaLeftovers().count)
-        [rows addObject:SGWarningRow(@"Chroma left files behind", [NSString stringWithFormat:@"%@ Vitrine never uses. Tap to delete", sizeOf(chromaLeftovers())], ^{ offerCleanup(); })];
+        [rows addObject:SGWarningRow(@"Chroma left files behind", [NSString stringWithFormat:@"%@ Glassify never uses. Tap to delete", sizeOf(chromaLeftovers())], ^{ offerCleanup(); })];
     return rows;
 }
 

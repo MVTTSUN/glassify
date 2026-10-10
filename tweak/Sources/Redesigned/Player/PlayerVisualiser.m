@@ -1,6 +1,8 @@
-// Player redesign: the Visualizer background, a calm spectrum of what is playing behind the player, in the
-// cover's colors, over the Fluid field held still (PlayerField.x keeps the field Fluid for this choice, as for
-// Animated, so the ⋯ menu moves between the three without a restart).
+// Player redesign: the Visualizer background, the song drawn behind the player in the cover's colors, over the
+// Fluid field held still (PlayerField.x keeps the field Fluid for this choice, as for Animated, so the ⋯ menu moves
+// between the three without a restart). It is drawn one of two ways, as the Player page's picker says
+// (SGRKeyVisualiserShader): Hills, below, or a Metal shader, built in or the user's own (SGRShaderSource.h), drawn
+// by SGRShaderView.m from the same sound through SGRSpectrum.h's snapshot: 32 bands, the loudness and the beats.
 //
 // The sound is Spotify's output as it plays, read on the render thread through the audio effects' notify
 // (SGAudioSetOutputReader, Shared/AudioEffects/AudioEffects.h) into SGRSpectrum.m's bands. Here, on the main
@@ -11,12 +13,19 @@
 // the cover's colors (SGRPalette's flow colors, kept dark enough that white text on them stays over 5.5:1)
 // masked by a shape layer, so the render server does the drawing and the app only hands it two paths a frame.
 //
-// It moves only while it is in a window, Spotify is in front, the player is not opening or closing, Low Power
-// Mode is off and the song plays; a pause lets the hills settle and the link stops, and nothing is read from
+// A shader gets the bands brought to the song's loudness the same way, eased more quickly, the loudness, a beat that
+// jumps to 1 and fades over a fifth of a second, the Intensity slider and the cover's first four flow colors, and
+// draws at half the screen's pixels. A shader is compiled when it is first shown (the hills or the last shader stay
+// until it is in, then it fades in over them); one that does not compile or that the GPU stops gives the hills back.
+//
+// It moves only while it is in a window, Spotify is in front, the player is not opening or closing and the song
+// plays; a pause lets the bands settle and the link stops (a shader's clock with it), and nothing is read from
 // the sound while it is stopped. At most 60 frames a second, 30 while the lyrics, which have a link of their own,
-// are open and the hills are blurred behind them, and with Reduce Motion 15, with every band easing over
-// seconds. While the player opens or closes the link is down, and comes back only once the animation is over:
-// a link at 60 would hold the transition's 120 Hz down with it.
+// are open and it is blurred behind them, and in the Player page's picker; in Low Power Mode with Reduce in Low
+// Power Mode on (SGRKeyVisualiserLowPower, on until switched off) 20, a shader at a third of the screen's pixels;
+// with Reduce Motion 15, with every band easing over seconds and no beat. While the player opens or closes the
+// link is down, and comes back only once the animation is over: a link at 60 would hold the transition's 120 Hz
+// down with it.
 //
 // ponytail: the hills follow what the output is handed, which a Bluetooth headset plays a fifth of a second or
 // so later. Music Haptics schedules for the output latency; do the same here if the beat looks early on AirPods.
@@ -29,9 +38,11 @@
 #import "Shared/Player/PlayerState.h"
 #import "Shared/Player/SpeedPitch.h"
 #import "Player.h"
+#import "SGRShaderView.h"
 #import "SGRSpectrum.h"
 
-enum { kBands = SGRSpectrumBands, kPoints = 2 * kBands - 1 };
+enum { kBands = SGRSpectrumBands, kPoints = 2 * kBands - 1, kFine = SGRSpectrumFineBands };
+_Static_assert(kFine == sizeof(((SGRShaderUniforms *)0)->bands) / sizeof(float), "a shader gets every band of the snapshot");
 // The loudness a band is drawn against: the loudest band of late at the top, kRange dB under it at the floor,
 // the top falling kPeakFall dB a second after a loud passage and never under kPeakFloor, so silence stays flat.
 static const float kRange = 40, kPeakFall = 4, kPeakFloor = -60;
@@ -49,6 +60,96 @@ static const float kSettled = 0.02f;
 // Each band shares this much with either neighbor, twice over, so one loud band is a hill and not a spike.
 static const float kSpread = 0.25f;
 static const NSTimeInterval kTransitionSlack = 0.05;
+// The shaders' bands: the tilt over 32 bands across nine octaves, as the hills' over 24 across eight, and quicker
+// easing, as a shader draws the bands themselves rather than a smooth outline of them.
+static const float kFineTilt = 0.5f;
+static const double kFineUp = 0.05, kFineDown = 0.3;
+// The loudness drawn against its own peak, kLoudRange dB under it at 0; a beat fades over kBeatFade seconds.
+static const float kLoudRange = 30;
+static const double kLoudUp = 0.1, kLoudDown = 0.5, kBeatFade = 0.18;
+// The shaders' brightness ceiling as relative luminance: white text keeps 5.5:1 over it, 8:1 with Increase Contrast.
+static const float kCeiling = 0.14f, kContrastCeiling = 0.07f;
+// The share of the screen's pixels a shader draws, and in Low Power Mode with Reduce on.
+static const CGFloat kRenderScale = 0.5, kReducedRenderScale = 0.34;
+
+#pragma mark - settings
+
+NSNotificationName const SGRVisualiserSettingsDidChangeNotification = @"SGRVisualiserSettingsDidChangeNotification";
+
+static void settingsChanged(void) {
+    [NSNotificationCenter.defaultCenter postNotificationName:SGRVisualiserSettingsDidChangeNotification object:nil];
+}
+
+void SGRVisualiserSettingsChanged(void) {
+    settingsChanged();
+}
+
+NSString *SGRVisualiserShader(void) {
+    NSString *stored = [NSUserDefaults.standardUserDefaults stringForKey:SGRKeyVisualiserShader];
+    // A custom one deleted reads as Hills.
+    return stored.length && SGRShaderName(stored) ? stored : SGRShaderHills;
+}
+
+void SGRSetVisualiserShader(NSString *identifier) {
+    if ([identifier isEqualToString:SGRVisualiserShader()]) return;
+    [NSUserDefaults.standardUserDefaults setObject:identifier forKey:SGRKeyVisualiserShader];
+    SGLog(@"redesign player: visualizer shader %@", identifier);
+    settingsChanged();
+}
+
+// Read on every frame, so kept here rather than asked of the defaults each time.
+static NSInteger sg_intensity;
+
+NSInteger SGRVisualiserIntensity(void) {
+    if (!sg_intensity) sg_intensity = MIN(200, MAX(25, SGInt(SGRKeyVisualiserIntensity, 100)));
+    return sg_intensity;
+}
+
+void SGRSetVisualiserIntensity(NSInteger percent) {
+    sg_intensity = MIN(200, MAX(25, percent));
+    SGSetInt(SGRKeyVisualiserIntensity, sg_intensity);
+    settingsChanged();
+}
+
+#pragma mark - the cover's colors
+
+// Every view on screen shows the same cover (the player's and the Player page's picker of up to a dozen), so its
+// colors are worked out once and handed to each.
+static NSString *sg_paletteOf;
+static NSArray<UIColor *> *sg_paletteColors;
+static NSMutableArray<void (^)(NSArray<UIColor *> *)> *sg_paletteWaiting;
+
+static void paletteFor(UIImage *image, NSString *identity, void (^done)(NSArray<UIColor *> *colors)) {
+    if (!identity) identity = [NSString stringWithFormat:@"%p", image];
+    if ([identity isEqualToString:sg_paletteOf]) {
+        if (sg_paletteColors) done(sg_paletteColors);
+        else [sg_paletteWaiting addObject:done];
+        return;
+    }
+    sg_paletteOf = identity;
+    sg_paletteColors = nil;
+    sg_paletteWaiting = [NSMutableArray arrayWithObject:done];
+    SGRPaletteRequest request = {CGSizeZero, NO, YES, YES, NO};
+    [SGRPalette paletteForImage:image request:request completion:^(SGRPalette *palette) {
+        if (![identity isEqualToString:sg_paletteOf]) return;
+        NSArray<void (^)(NSArray<UIColor *> *)> *waiting = sg_paletteWaiting;
+        sg_paletteWaiting = nil;
+        if (palette.flowColors.count < 5) {
+            sg_paletteOf = nil;
+            return;
+        }
+        sg_paletteColors = palette.flowColors;
+        for (void (^each)(NSArray<UIColor *> *) in waiting) each(sg_paletteColors);
+    }];
+}
+
+static simd_float4 colorVector(UIColor *color) {
+    CGFloat r = 0, g = 0, b = 0, a = 1;
+    [color getRed:&r green:&g blue:&b alpha:&a];
+    return simd_make_float4((float)r, (float)g, (float)b, 1);
+}
+
+#pragma mark - the hills and the shaders
 
 static NSUInteger sg_readers;
 
@@ -75,6 +176,9 @@ static NSDictionary *noActions(void) {
 }
 
 @interface SGRVisualiserView : UIView <SGPlayerStateObserver>
+// `style` a shader's identifier for a picker's tile, or nil for the one the setting picks; `compact` for the
+// Player page, at most 30 frames a second.
+- (instancetype)initWithFrame:(CGRect)frame style:(NSString *)style compact:(BOOL)compact;
 // Where the hills stand, in points from the top: the screen's foot in the player. 0 is the bounds' foot.
 @property (nonatomic) CGFloat baseline;
 // The height the hills are a share of; 0 is the bounds' height.
@@ -86,7 +190,8 @@ static NSDictionary *noActions(void) {
 @end
 
 @implementation SGRVisualiserView {
-    UIView *_content;   // the hills, faded in and out as one
+    UIView *_content;   // the hills or the shader, faded in and out as one
+    UIView *_hills;     // the two fills, faded out under a shader
     CAGradientLayer *_backFill, *_frontFill;
     CAShapeLayer *_backShape, *_frontShape;
     UIVisualEffectView *_lyricsBlur;
@@ -95,7 +200,16 @@ static NSDictionary *noActions(void) {
     float _front[kBands], _back[kBands], _peak;
     uint64_t _generation;
     CFTimeInterval _fresh, _last;
-    NSUInteger _palette;
+    // The shader: the one drawn, and the one compiling to take over from it (or from the hills).
+    NSString *_fixedStyle, *_style, *_styleBody;
+    SGRShaderView *_shader, *_incoming;
+    BOOL _compact, _reduced;
+    float _fine[kFine], _finePeak, _loudness, _loudnessPeak, _beat;
+    uint64_t _beats;
+    BOOL _beatsKnown;
+    double _clock;
+    simd_float4 _palette[4], _paletteFrom[4];
+    CFTimeInterval _paletteStart;
 }
 
 // As PlayerMotion.x: what fades is the effect view's effect, never its alpha or an ancestor's.
@@ -114,18 +228,27 @@ static CAGradientLayer *fill(CAShapeLayer *shape) {
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
+    return [self initWithFrame:frame style:nil compact:NO];
+}
+
+- (instancetype)initWithFrame:(CGRect)frame style:(NSString *)style compact:(BOOL)compact {
     if (!(self = [super initWithFrame:frame])) return nil;
     self.userInteractionEnabled = NO;
     self.accessibilityElementsHidden = YES;
-    _peak = kPeakFloor;
+    _fixedStyle = [style copy];
+    _compact = compact;
+    _peak = _finePeak = _loudnessPeak = kPeakFloor;
+    for (int i = 0; i < 4; i++) _palette[i] = _paletteFrom[i] = simd_make_float4(0.25f, 0.25f, 0.25f, 1);
     _content = [[UIView alloc] initWithFrame:frame];
+    _hills = [[UIView alloc] initWithFrame:frame];
     _backShape = [CAShapeLayer layer];
     _backFill = fill(_backShape);
     _backFill.opacity = 0.55f;
-    [_content.layer addSublayer:_backFill];
+    [_hills.layer addSublayer:_backFill];
     _frontShape = [CAShapeLayer layer];
     _frontFill = fill(_frontShape);
-    [_content.layer addSublayer:_frontFill];
+    [_hills.layer addSublayer:_frontFill];
+    [_content addSubview:_hills];
     [self addSubview:_content];
     _lyricsBlur = [[UIVisualEffectView alloc] initWithEffect:nil];
     _lyricsBlur.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
@@ -138,8 +261,11 @@ static CAGradientLayer *fill(CAShapeLayer *shape) {
         [center addObserver:self selector:@selector(updateMotionSoon) name:name object:nil];
     }
     [center addObserver:self selector:@selector(artworkChanged) name:SGRNowPlayingArtworkDidChangeNotification object:nil];
+    // Posted on the main thread only (the settings above and the Player page).
+    [center addObserver:self selector:@selector(settingsChanged) name:SGRVisualiserSettingsDidChangeNotification object:nil];
     SGRObservePlayerTransition(self, ^(id owner) { [owner updateMotion]; }, ^(id owner) { [owner updateMotion]; });
     SGAddPlayerStateObserver(self);
+    [self applyStyle];
     [self artworkChanged];
     [self draw];
     return self;
@@ -161,31 +287,130 @@ static CAGradientLayer *fill(CAShapeLayer *shape) {
     _backFill.colors = @[(id)colors[0].CGColor, (id)colors[1].CGColor];
 }
 
+// A shader's four colors: the cover's quarters, crossing over from those it had as the hills' do.
+- (void)paletteNow:(simd_float4 *)palette {
+    float k = _paletteStart ? (float)MIN(1, MAX(0, (CACurrentMediaTime() - _paletteStart) / SGRCrossfade)) : 1;
+    k = k * k * (3 - 2 * k);
+    for (int i = 0; i < 4; i++) palette[i] = simd_mix(_paletteFrom[i], _palette[i], simd_make_float4(k, k, k, k));
+}
+
 - (void)artworkChanged {
-    UIImage *image = SGRNowPlayingArtwork(NULL, NULL);
+    NSString *identity = nil;
+    UIImage *image = SGRNowPlayingArtwork(NULL, &identity);
     if (!image) return;
-    NSUInteger generation = ++_palette;
-    SGRPaletteRequest request = {CGSizeZero, NO, YES, YES, NO};
     __weak SGRVisualiserView *weakSelf = self;
-    [SGRPalette paletteForImage:image request:request completion:^(SGRPalette *palette) {
-        SGRVisualiserView *view = weakSelf;
-        if (!view || !palette.flowColors || generation != view->_palette) return;
-        if (!view.window) {
-            [view applyColors:palette.flowColors];
-            return;
-        }
-        // The colors cross over as the field's do.
-        [CATransaction begin];
-        [CATransaction setAnimationDuration:SGRCrossfade];
-        [CATransaction setAnimationTimingFunction:[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut]];
-        for (CAGradientLayer *layer in @[view->_frontFill, view->_backFill]) {
-            CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"colors"];
-            fade.fromValue = (layer.presentationLayer ?: layer).colors;
-            [layer addAnimation:fade forKey:@"colors"];
-        }
-        [view applyColors:palette.flowColors];
-        [CATransaction commit];
-    }];
+    paletteFor(image, identity, ^(NSArray<UIColor *> *colors) { [weakSelf takeColors:colors]; });
+}
+
+- (void)takeColors:(NSArray<UIColor *> *)colors {
+    // Moving, a shader crosses over in step with its frames; otherwise it takes them at once in one frame.
+    [self paletteNow:_paletteFrom];
+    for (int i = 0; i < 4; i++) _palette[i] = colorVector(colors[i]);
+    _paletteStart = self.window && _link ? CACurrentMediaTime() : 0;
+    if (!_link) [self renderShader];
+    if (!self.window) {
+        [self applyColors:colors];
+        return;
+    }
+    // The colors cross over as the field's do.
+    [CATransaction begin];
+    [CATransaction setAnimationDuration:SGRCrossfade];
+    [CATransaction setAnimationTimingFunction:[CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut]];
+    for (CAGradientLayer *layer in @[_frontFill, _backFill]) {
+        CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"colors"];
+        fade.fromValue = (layer.presentationLayer ?: layer).colors;
+        [layer addAnimation:fade forKey:@"colors"];
+    }
+    [self applyColors:colors];
+    [CATransaction commit];
+}
+
+#pragma mark - which shader
+
+- (BOOL)drawsShader {
+    return _shader != nil || _incoming != nil;
+}
+
+- (void)settingsChanged {
+    [self applyStyle];
+    [self updateMotion];
+    if (!_link) {
+        [self draw];
+        [self renderShader];
+    }
+}
+
+// The style the setting or the tile asks for, made: the hills at once, a shader once it has compiled.
+- (void)applyStyle {
+    NSString *style = _fixedStyle ?: SGRVisualiserShader(), *body = SGRShaderBody(style);
+    // A custom one saved again is made again from its new body.
+    if ([style isEqualToString:_style] && (body == _styleBody || [body isEqualToString:_styleBody])) return;
+    _style = style;
+    _styleBody = body;
+    [_incoming removeFromSuperview];
+    _incoming = nil;
+    if ([style isEqualToString:SGRShaderHills]) {
+        [self showHills];
+        return;
+    }
+    SGRShaderView *view = [[SGRShaderView alloc] initWithFrame:self.bounds];
+    view.alpha = 0;
+    view.renderScale = _reduced ? kReducedRenderScale : kRenderScale;
+    [_content addSubview:view];
+    _incoming = view;
+    __weak SGRVisualiserView *weakSelf = self;
+    __weak SGRShaderView *weakView = view;
+    view.arrived = ^{ [weakSelf promote:weakView]; };
+    view.failed = ^(NSString *error) { [weakSelf shaderFailed:weakView]; };
+    view.shader = style;
+}
+
+// The shader compiled: drawn once and faded in over what was there.
+- (void)promote:(SGRShaderView *)view {
+    if (!view || view != _incoming) return;
+    _incoming = nil;
+    SGRShaderView *old = _shader;
+    _shader = view;
+    [self renderShader];
+    void (^swap)(void) = ^{
+        view.alpha = 1;
+        old.alpha = 0;
+        self->_hills.alpha = 0;
+    };
+    if (self.window) SGRAnimate(SGRMotionFade, swap, ^(BOOL finished) { [old removeFromSuperview]; });
+    else {
+        swap();
+        [old removeFromSuperview];
+    }
+    [self updateMotion];
+}
+
+// A shader that did not compile, or that the GPU stopped: the hills come back in its place.
+- (void)shaderFailed:(SGRShaderView *)view {
+    if (!view || (view != _incoming && view != _shader)) return;
+    if (view == _incoming && _shader) {
+        // The last shader stays; the choice that failed is not drawn.
+        [view removeFromSuperview];
+        _incoming = nil;
+        return;
+    }
+    [self showHills];
+}
+
+- (void)showHills {
+    SGRShaderView *shader = _shader, *incoming = _incoming;
+    _shader = _incoming = nil;
+    [incoming removeFromSuperview];
+    void (^swap)(void) = ^{
+        shader.alpha = 0;
+        self->_hills.alpha = 1;
+    };
+    if (self.window && shader) SGRAnimate(SGRMotionFade, swap, ^(BOOL finished) { [shader removeFromSuperview]; });
+    else {
+        swap();
+        [shader removeFromSuperview];
+    }
+    [self draw];
 }
 
 #pragma mark - showing
@@ -200,12 +425,17 @@ static CAGradientLayer *fill(CAShapeLayer *shape) {
     [super layoutSubviews];
     CGRect bounds = self.bounds;
     _content.frame = bounds;
+    _hills.frame = bounds;
+    _shader.frame = bounds;
+    _incoming.frame = bounds;
     _lyricsBlur.frame = bounds;
     _backFill.frame = bounds;
     _frontFill.frame = bounds;
     _backShape.frame = bounds;
     _frontShape.frame = bounds;
     [self draw];
+    // A still shader drawn again at its new size, once it has laid out.
+    if (_shader && !_link) [self performSelector:@selector(renderShader) withObject:nil afterDelay:0];
 }
 
 - (void)appear:(BOOL)animated {
@@ -249,6 +479,10 @@ static CAGradientLayer *fill(CAShapeLayer *shape) {
 }
 
 - (BOOL)settled {
+    if (self.drawsShader) {
+        for (int band = 0; band < kFine; band++) if (_fine[band] > kSettled) return NO;
+        return _loudness <= kSettled && _beat <= kSettled;
+    }
     for (int band = 0; band < kBands; band++) if (_front[band] > kSettled || _back[band] > kSettled) return NO;
     return YES;
 }
@@ -258,7 +492,9 @@ static CAGradientLayer *fill(CAShapeLayer *shape) {
 - (void)updateMotion {
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(updateMotion) object:nil];
     BOOL front = UIApplication.sharedApplication.applicationState == UIApplicationStateActive;
-    BOOL may = self.window && front && !NSProcessInfo.processInfo.lowPowerModeEnabled;
+    BOOL may = self.window && front;
+    _reduced = NSProcessInfo.processInfo.lowPowerModeEnabled && SGEnabled(SGRKeyVisualiserLowPower);
+    _shader.renderScale = _incoming.renderScale = _reduced ? kReducedRenderScale : kRenderScale;
     NSTimeInterval wait = SGPlayerTransitionEnds() - CACurrentMediaTime();
     if (may && (wait > 0 || SGRPlayerIsTransitioning())) {
         may = NO;
@@ -283,9 +519,10 @@ static CAGradientLayer *fill(CAShapeLayer *shape) {
             [_link addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
             _last = 0;
         }
-        // Calmer behind the lyrics, whose own link runs at the display's rate, and calmest with Reduce Motion.
-        // While a playing song sends nothing (a stall, or no tap at all), a few frames a second watch for it.
-        float most = _idle ? 4 : SGRReduceMotion() ? 15 : _lyricsBlur.effect ? 30 : 60;
+        // Calmer behind the lyrics, whose own link runs at the display's rate, and in the Player page's picker,
+        // slower in Low Power Mode, and calmest with Reduce Motion. While a playing song sends nothing (a stall, or
+        // no tap at all), a few frames a second watch for it.
+        float most = _idle ? 4 : SGRReduceMotion() ? 15 : _reduced ? 20 : _lyricsBlur.effect || _compact ? 30 : 60;
         _link.preferredFrameRateRange = CAFrameRateRangeMake(most / 2, most, most);
     } else if (_link) {
         [_link invalidate];
@@ -302,6 +539,10 @@ static float ease(float value, float target, double dt, double up, double down) 
     CFTimeInterval now = link.timestamp;
     double dt = _last ? MIN(now - _last, 0.1) : link.duration;
     _last = now;
+    if (self.drawsShader) {
+        [self tickShader:dt now:now];
+        return;
+    }
     float levels[kBands];
     uint64_t generation = SGRSpectrumRead(levels);
     if (generation != _generation) {
@@ -345,6 +586,62 @@ static float ease(float value, float target, double dt, double up, double down) 
     }
 }
 
+// The shader's frame: the snapshot's bands, loudness and beats brought to 0..1 and eased, then drawn. Idle, it is
+// not drawn again, so a stall holds the last frame rather than stepping its clock a few times a second.
+- (void)tickShader:(double)dt now:(CFTimeInterval)now {
+    SGRSpectrumSnapshot snapshot;
+    uint64_t generation = SGRSpectrumReadSnapshot(&snapshot);
+    if (generation != _generation) {
+        _generation = generation;
+        _fresh = now;
+    }
+    BOOL silent = !_reading || now - _fresh > kStale, still = SGRReduceMotion();
+    float loudest = kPeakFloor;
+    for (int band = 0; band < kFine; band++) {
+        snapshot.levels[band] += kFineTilt * band;
+        loudest = fmaxf(loudest, snapshot.levels[band]);
+    }
+    if (!silent) {
+        _finePeak = fmaxf(fmaxf(loudest, _finePeak - kPeakFall * (float)dt), kPeakFloor);
+        _loudnessPeak = fmaxf(fmaxf(snapshot.rms, _loudnessPeak - kPeakFall * (float)dt), kPeakFloor);
+    }
+    for (int band = 0; band < kFine; band++) {
+        float target = silent ? 0 : fminf(1, fmaxf(0, (snapshot.levels[band] - (_finePeak - kRange)) / kRange));
+        _fine[band] = ease(_fine[band], target, dt, still ? kStillEase : kFineUp, still ? kStillEase : kFineDown);
+    }
+    float loudness = silent ? 0 : fminf(1, fmaxf(0, (snapshot.rms - (_loudnessPeak - kLoudRange)) / kLoudRange));
+    _loudness = ease(_loudness, loudness, dt, still ? kStillEase : kLoudUp, still ? kStillEase : kLoudDown);
+    // The first count read is where the song was, not a beat.
+    if (!_beatsKnown || snapshot.beats == _beats) _beat *= (float)exp(-dt / kBeatFade);
+    else if (!silent && !still) _beat = 1;
+    _beatsKnown = YES;
+    _beats = snapshot.beats;
+    _clock = fmod(_clock + dt * (still ? 0.25 : 1), 3600);
+    BOOL idle = silent && self.settled;
+    if (idle && !_idle) {
+        memset(_fine, 0, sizeof _fine);
+        _loudness = _beat = 0;
+    }
+    if (!idle || !_idle) [self renderShader];
+    if (idle != _idle) {
+        _idle = idle;
+        [self updateMotion];
+    }
+}
+
+- (void)renderShader {
+    if (!_shader.ready) return;
+    SGRShaderUniforms uniforms = {0};
+    uniforms.time = (float)_clock;
+    [self paletteNow:uniforms.palette];
+    memcpy(uniforms.bands, _fine, sizeof uniforms.bands);
+    uniforms.rms = _loudness;
+    uniforms.beat = _beat;
+    uniforms.intensity = SGRVisualiserIntensity() / 100.0f;
+    uniforms.ceiling = SGRIncreaseContrast() ? kContrastCeiling : kCeiling;
+    [_shader render:uniforms];
+}
+
 #pragma mark - drawing
 
 // A smooth line through the points (Catmull-Rom as cubic Béziers), closed down to the foot of the bounds.
@@ -382,10 +679,11 @@ static void shape(CAShapeLayer *layer, const float *bands, CGFloat width, CGFloa
     CGFloat baseline = _baseline > 0 ? _baseline : bounds.size.height;
     CGFloat screen = _screenHeight > 0 ? _screenHeight : bounds.size.height;
     CGFloat foot = MAX(baseline, bounds.size.height), rest = round(screen * kRestHeight);
+    CGFloat gain = SGRVisualiserIntensity() / 100.0;
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    shape(_backShape, _back, bounds.size.width, baseline, foot, screen * kBackHeight, rest * 1.5);
-    shape(_frontShape, _front, bounds.size.width, baseline, foot, screen * kFrontHeight, rest);
+    shape(_backShape, _back, bounds.size.width, baseline, foot, screen * kBackHeight * gain, rest * 1.5);
+    shape(_frontShape, _front, bounds.size.width, baseline, foot, screen * kFrontHeight * gain, rest);
     [CATransaction commit];
 }
 
@@ -400,7 +698,11 @@ BOOL SGRPlayerVisualiserShowing(void) {
 }
 
 UIView *SGRPlayerVisualiserPreview(void) {
-    return [[SGRVisualiserView alloc] initWithFrame:CGRectZero];
+    return [[SGRVisualiserView alloc] initWithFrame:CGRectZero style:nil compact:YES];
+}
+
+UIView *SGRPlayerVisualiserPreviewOf(NSString *shader) {
+    return [[SGRVisualiserView alloc] initWithFrame:CGRectZero style:shader compact:YES];
 }
 
 // The hills from the top of the field to the foot of its bleed, standing on the screen's foot.

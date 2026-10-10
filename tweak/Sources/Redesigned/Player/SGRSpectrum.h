@@ -1,6 +1,8 @@
-// The player's Visualizer background (PlayerVisualiser.x) reads the sound through this: what Spotify's
+// The player's Visualizer background (PlayerVisualiser.m) reads the sound through this: what Spotify's
 // output plays, cut into SGRSpectrumBands bands spaced evenly in pitch from kLowest to kHighest Hz (SGRSpectrum.m),
-// each band's level in dB, 0 dB being a full scale sine in it.
+// each band's level in dB, 0 dB being a full scale sine in it. The same analysis also publishes a snapshot for the
+// shaders (SGRShaderSource.h): SGRSpectrumFineBands bands spaced evenly in pitch from 30 Hz to 16 kHz, the hop's
+// loudness and a count of the beats heard in the low end.
 //
 // Every 1024 samples the last 4096, through a Hann window and Accelerate's real FFT, are summed into the bands
 // and published, so at 48 kHz about 47 times a second. Plain C, so harness/visualiser/ runs it on the Mac.
@@ -22,3 +24,14 @@ void SGRSpectrumFeed(const float *samples, uint32_t count, double sampleRate);
 // The last levels into `levels`, low band first; answers how many analyses there have been, so a caller can
 // tell when nothing new came (paused, or the tap never ran).
 uint64_t SGRSpectrumRead(float levels[SGRSpectrumBands]);
+
+// The shaders' view of the same analysis.
+enum { SGRSpectrumFineBands = 32 };
+typedef struct {
+    float levels[SGRSpectrumFineBands];   // dB as SGRSpectrumRead's, low band first, 30 Hz to 16 kHz
+    float rms;                            // dB of the last hop's samples, a full scale sine -3 dB
+    uint64_t beats;                       // the low end's onsets since SGRSpectrumPrepare (a kick, mostly)
+} SGRSpectrumSnapshot;
+// The last snapshot, all of it from one analysis unless the render thread kept writing through a few retries;
+// answers the same count as SGRSpectrumRead.
+uint64_t SGRSpectrumReadSnapshot(SGRSpectrumSnapshot *snapshot);

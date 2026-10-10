@@ -1,11 +1,16 @@
-// Player redesign: a volume slider under the controls, as the Music app has. It is MPVolumeView, as the HIG asks
-// (sliders.md, playing-audio.md), so it is the system's volume: the hardware buttons move it, and while Spotify plays
-// on a Connect device it is that device's, which Spotify hands iOS through its remote volume. No route button: the
-// footer's Connect glyph is the route.
+// Player redesign: a volume slider under the controls, as the Music app has. On this iPhone it is MPVolumeView, as
+// the HIG asks (sliders.md, playing-audio.md), so it is the system's volume: the hardware buttons move it, and while
+// it is on screen the system's volume HUD stays away. No route button: the footer's Connect glyph is the route.
+// While Spotify plays on a Connect device it is a slider of the mod's over Spotify's own Connect volume
+// (PlayerConnectVolume.x), the speaker's, which follows it as the device or the hardware buttons change it;
+// MPVolumeView then goes, so the buttons do what Spotify makes them do. With Spotify's volume objects not
+// seen yet, MPVolumeView stays.
 //
 // It sits in Spotify's bottom stack, outside its arranged views, between the controls and the footer row, so the
 // lyrics fade it with the rest of the stack (PlayerLyrics.x) and its touches stay inside the stack. The footer's
 // lowerRow (PlayerFooter.x) places it after the moves, and keeps the controls where Spotify put them to make the room.
+// While the lyrics' landscape screen is up (PlayerLandscape.x) the row is hidden, so the volume HUD comes back
+// there.
 #import <MediaPlayer/MediaPlayer.h>
 #import <objc/runtime.h>
 #import "Core/SGCore.h"
@@ -24,8 +29,13 @@ static const CGFloat kTrackAbove = 2;
 
 @implementation SGRVolumeRow {
     MPVolumeView *_volume;
+    UISlider *_remote;   // the Connect device's
     UIImageView *_quiet, *_loud;
+    BOOL _playsRemotely, _retryQueued;
+    CFTimeInterval _settleUntil;   // the device's own volume is not shown over a value just set until then
 }
+
+static __weak SGRVolumeRow *sg_row;
 
 static UIImage *trackImage(UIColor *color) {
     CGFloat side = kTrack;
@@ -65,12 +75,80 @@ static UIImageView *glyph(NSString *symbol) {
     [_volume setMinimumVolumeSliderImage:trackImage(UIColor.whiteColor) forState:UIControlStateNormal];
     [_volume setMaximumVolumeSliderImage:trackImage([UIColor colorWithWhite:1 alpha:0.22]) forState:UIControlStateNormal];
     [_volume setVolumeThumbImage:thumbImage() forState:UIControlStateNormal];
+    _remote = [UISlider new];
+    [_remote setMinimumTrackImage:trackImage(UIColor.whiteColor) forState:UIControlStateNormal];
+    [_remote setMaximumTrackImage:trackImage([UIColor colorWithWhite:1 alpha:0.22]) forState:UIControlStateNormal];
+    [_remote setThumbImage:thumbImage() forState:UIControlStateNormal];
+    _remote.accessibilityLabel = @"Volume";
+    _remote.alpha = 0;
+    _remote.userInteractionEnabled = NO;
+    [_remote addTarget:self action:@selector(remoteMoved) forControlEvents:UIControlEventValueChanged];
+    [_remote addTarget:self action:@selector(remoteReleased)
+      forControlEvents:UIControlEventTouchUpInside | UIControlEventTouchUpOutside | UIControlEventTouchCancel];
     _quiet = glyph(@"speaker.fill");
     _loud = glyph(@"speaker.wave.3.fill");
     [self addSubview:_quiet];
     [self addSubview:_volume];
+    [self addSubview:_remote];
     [self addSubview:_loud];
+    // Spotify's objects post from their own threads; PlayerConnectVolume.x moves them onto the main queue.
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refresh) name:SGRConnectVolumeDidChangeNotification object:nil];
     return self;
+}
+
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+}
+
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    if (!self.window) return;
+    sg_row = self;
+    [self observe];
+    [self refresh];
+}
+
+// Spotify's volume objects may not have been seen when the player first shows: looked for again every 2 s while
+// the row is on screen, until both are observed.
+- (void)observe {
+    if (SGRConnectVolumeObserve() || _retryQueued) return;
+    _retryQueued = YES;
+    __weak SGRVolumeRow *weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        SGRVolumeRow *row = weakSelf;
+        if (!row) return;
+        row->_retryQueued = NO;
+        if (!row.window) return;
+        [row observe];
+        [row refresh];
+    });
+}
+
+// Which of the two shows, and where the Connect slider stands.
+- (void)refresh {
+    BOOL remote = SGRConnectPlaysRemotely();
+    double volume = remote ? SGRConnectVolume() : NAN;
+    if (isnan(volume)) remote = NO;
+    if (remote != _playsRemotely) {
+        _playsRemotely = remote;
+        SGLog(@"redesign player: volume row is %@", remote ? @"the Connect device's" : @"this iPhone's");
+    }
+    // Hidden rather than faded, so the system's HUD comes back with it gone: MPVolumeView keeps it away while it shows.
+    BOOL landscape = SGRPlayerLandscapeShowing();
+    if (_volume.hidden != (remote || landscape)) _volume.hidden = remote || landscape;
+    _remote.alpha = remote && !landscape ? 1 : 0;
+    _remote.userInteractionEnabled = remote && !landscape;
+    _remote.accessibilityElementsHidden = !_remote.userInteractionEnabled;
+    if (remote && !_remote.tracking && CACurrentMediaTime() >= _settleUntil) _remote.value = (float)volume;
+}
+
+- (void)remoteMoved {
+    SGRConnectSetVolume(_remote.value, NO);
+}
+
+- (void)remoteReleased {
+    _settleUntil = CACurrentMediaTime() + 1;
+    SGRConnectSetVolume(_remote.value, YES);
 }
 
 - (void)layoutSubviews {
@@ -84,6 +162,8 @@ static UIImageView *glyph(NSString *symbol) {
     // centered, so the track lines up with the glyphs (it sat 9pt above them).
     CGFloat sliderHeight = MIN(side, [_volume sizeThatFits:CGSizeMake(MAX(0, right - left), side)].height ?: side);
     _volume.frame = CGRectMake(left, round(middle - sliderHeight / 2), MAX(0, right - left), sliderHeight);
+    // UISlider draws its track in its middle: the Connect slider goes up by what MPVolumeView's track sits above its own.
+    _remote.frame = CGRectOffset(_volume.frame, 0, -kTrackAbove);
 }
 
 @end
@@ -96,6 +176,10 @@ BOOL SGRPlayerVolumeOn(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{ on = SGEnabled(SGRKeyPlayerVolume); });
     return on;
+}
+
+void SGRPlayerVolumeRefresh(void) {
+    [sg_row refresh];
 }
 
 BOOL SGRPlayerPlaceVolume(UIView *stack, UIView *controls, UIView *row, CGFloat margin) {

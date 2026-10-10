@@ -7,13 +7,22 @@
 //     Show Fluid Artwork, Show Animated Artwork, Show Visualizer
 //                             a button for each of the two the background is not, while it is one of the
 //                             three, named for what it switches to
+//     Visualizer Style        while the Visualizer shows, a submenu of its shaders, built in and the user's own,
+//                             the one drawn checked (PlayerVisualiser.m), its name under the item
+//     Switch It Up            while the DJ plays (PlayerDJ.x): the DJ button of the DJ's own player, which the
+//                             redesign's player has no room for, the DJ moving on to something else
+//     Download Song / Remove Download
+//                             Spotify's own offline download for this one song (Shared/TrackDownload), not its
+//                             album; offered once Spotify's offline manager has been seen and for songs only
 //
 // The item says under its name what is not as Spotify plays it, so the menu reads as a settings summary.
 #import "Core/SGCore.h"
 #import "Redesigned/ContextMenu/ContextMenu.h"
 #import "Shared/Player/PlayerState.h"
 #import "Shared/Player/SpeedPitch.h"
+#import "Shared/TrackDownload/TrackDownload.h"
 #import "Player.h"
+#import "SGRShaderSource.h"
 
 static __weak UIView *sg_moreButton;   // the ⋯ the sliders' panel comes from
 
@@ -51,8 +60,54 @@ static UIAction *soundMenu(void) {
     return open;
 }
 
+// Download for the song alone; its state under the name while Spotify works on it.
+static UIAction *downloadItem(void) {
+    NSString *uri = SGURIString(SGPlayerState().track.URI);
+    SGTrackDownload state = SGTrackDownloadState(uri);
+    if (state == SGTrackDownloadUnavailable) return nil;
+    if (state == SGTrackDownloadNone) {
+        return [UIAction actionWithTitle:@"Download Song" image:symbol(@"arrow.down.circle") identifier:nil
+                                 handler:^(UIAction *action) { SGTrackDownloadAdd(uri); }];
+    }
+    UIAction *remove = [UIAction actionWithTitle:@"Remove Download" image:symbol(@"arrow.down.circle.fill") identifier:nil
+                                         handler:^(UIAction *action) { SGTrackDownloadRemove(uri); }];
+    remove.subtitle = state == SGTrackDownloadDone ? @"Downloaded" : @"Downloading";
+    return remove;
+}
+
+// The DJ's own jump, first while the DJ plays.
+static UIAction *djItem(void) {
+    if (!SGRPlayerDJCanJump() || !SGRPlayerDJPlaying()) return nil;
+    UIAction *jump = [UIAction actionWithTitle:@"Switch It Up" image:symbol(@"arrow.triangle.2.circlepath") identifier:nil
+                                       handler:^(UIAction *action) { SGRPlayerDJJump(); }];
+    jump.subtitle = @"DJ";
+    return jump;
+}
+
+// The Visualizer's shaders, a pick applying at once.
+static UIMenu *visualiserStyles(void) {
+    NSMutableArray<NSString *> *shaders = [SGRBuiltInShaders() mutableCopy];
+    for (SGRCustomShader *shader in SGRCustomShaders()) [shaders addObject:shader.identifier];
+    NSString *current = SGRVisualiserShader();
+    NSMutableArray<UIMenuElement *> *actions = [NSMutableArray array];
+    for (NSString *shader in shaders) {
+        UIAction *pick = [UIAction actionWithTitle:SGRShaderName(shader) image:nil identifier:nil
+                                           handler:^(UIAction *action) { SGRSetVisualiserShader(shader); }];
+        pick.state = [shader isEqualToString:current] ? UIMenuElementStateOn : UIMenuElementStateOff;
+        [actions addObject:pick];
+    }
+    UIMenu *menu = [UIMenu menuWithTitle:@"Visualizer Style" image:symbol(@"sparkles") identifier:nil options:0 children:actions];
+    menu.subtitle = SGRShaderName(current);
+    return menu;
+}
+
 static NSArray<UIMenuElement *> *playerItems(void) {
-    NSMutableArray<UIMenuElement *> *items = [NSMutableArray arrayWithObject:soundMenu()];
+    NSMutableArray<UIMenuElement *> *items = [NSMutableArray array];
+    UIAction *dj = djItem();
+    if (dj) [items addObject:dj];
+    [items addObject:soundMenu()];
+    UIAction *download = downloadItem();
+    if (download) [items addObject:download];
     if (SGPlayerMenuOffersAnimatedArtwork()) {
         // Buttons named for what they do, not checkmarks: the HIG's changeable label for a toggled item.
         NSArray<NSArray *> *backgrounds = @[
@@ -68,6 +123,7 @@ static NSArray<UIMenuElement *> *playerItems(void) {
                                                handler:^(UIAction *action) { SGRPlayerMenuSetBackground(kind); }]];
         }
     }
+    if (SGRPlayerBackground() == SGRPlayerBackgroundVisualiser) [items addObject:visualiserStyles()];
     return items;
 }
 

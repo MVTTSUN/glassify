@@ -16,6 +16,13 @@
 - (void)syncSiblings;
 // Called as a finger starts to scroll the lines, for a host that hides its controls then.
 @property (nonatomic, copy) void (^browsingBegan)(void);
+// Called as the lines, let alone after a scroll, start back to the line being sung (kBrowseHold on), before
+// they move: a host that puts its controls back then has the stack follow the song in the room they leave.
+// Not called for a tap on a line, which takes the stack there itself, nor for a song with no timing.
+@property (nonatomic, copy) void (^browsingEnded)(void);
+// Whether a tap at `point` (in this view) is the lines' own: a line to seek to, its meaning's bubble or the
+// credit. A host's tap that brings its controls back leaves those to the lines.
+- (BOOL)takesTapAt:(CGPoint)point;
 // The pronunciation and translation button goes with the host's controls when they are hidden, and Sing's
 // mic with it unless keepsSing is set.
 @property (nonatomic) BOOL extrasHidden;

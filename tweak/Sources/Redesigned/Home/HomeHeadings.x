@@ -3,7 +3,7 @@
 // Spotify's, which goes transparent: Spotify's label measures the heading, so the shelf keeps its layout,
 // and the heading button keeps its touch and its accessibility label. The larger title reaches a few
 // points up into the gap above the shelf. A small line over the title ("For fans of") and the artist's
-// picture beside it stay Spotify's.
+// picture beside it stay Spotify's. The Top picks shelf's title reads "Top Picks" (HomeTopPicks.x).
 //
 // The label is held on Spotify's by constraints, not by a frame worked out here: a heading with a picture lays
 // its labels out in a stack of its own, which is positioned after this hook has run, so a frame taken here put
@@ -92,7 +92,9 @@ static void restyle(UIView *button) {
 
     UIFont *font = SGRFont(UIFontTextStyleTitle2, UIFontWeightBold, UIContentSizeCategoryLarge);
     if (![mine.font isEqual:font]) mine.font = font;
-    if (![mine.text isEqualToString:theirs.text]) mine.text = theirs.text;
+    // The Top picks shelf is headed "Top Picks" whatever the server calls it (HomeTopPicks.x).
+    NSString *text = SGRHomeTopPicksShelfAround(heading) ? SGRHomeTopPicksTitle : theirs.text;
+    if (![mine.text isEqualToString:text]) mine.text = text;
     if (![mine.textColor isEqual:theirs.textColor]) mine.textColor = theirs.textColor;
     if (theirs.alpha != 0) theirs.alpha = 0;
 

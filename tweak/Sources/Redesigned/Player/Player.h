@@ -18,8 +18,14 @@
 //     PlayerGestures.x   the gestures' hookup
 //     PlayerMorph.x      the open and close grown out of the now playing bar's card, the cover flown
 //     PlayerMotion.x     Animated artwork: the Canvas or Apple Music's animated cover behind the player
-//     PlayerVisualiser.m the Visualizer background: a calm spectrum of the song in the cover's colors, read
+//     PlayerVisualiser.m the Visualizer background: the song in the cover's colors as hills or a Metal shader
+//                        (SGRShaderSource.m's built-in ones and the user's own, drawn by SGRShaderView.m), read
 //                        through SGRSpectrum.m from the audio effects' tap on Spotify's output
+//     PlayerVisualiserSettings.m  the Visualizer's rows on the Player page: the shader picker, Intensity, Reduce
+//                        in Low Power Mode and the Custom Shaders page with its editor
+//     PlayerDJ.x         the DJ in this player, its mode set aside, and the DJ button's jump in the ⋯ menu
+//     PlayerVolume.m     the volume row under the controls, this iPhone's or, through PlayerConnectVolume.x,
+//                        the Connect device's
 //     PlayerMenu.m       the more button's system menu: Share, Add to playlist and Add to queue on top, then
 //                        speed, pitch and reverb, the backgrounds it can switch to, and Spotify's other rows
 //                        under More (Redesigned/ContextMenu)
@@ -87,9 +93,14 @@ void SGRPlayerToggleLyrics(void);
 // (PlayerFooter.x). It returns at once when nothing changed.
 void SGRPlayerLyricsChanged(void);
 // The controls under the lines fade a few seconds after the last touch while the lyrics play, and the
-// lines grow down into their room (PlayerLyrics.x). On until switched off; a scroll through the lines
-// hides them either way.
+// lines grow down into their room (PlayerLyrics.x). On until switched off; the landscape lyrics read it too.
 #define SGRKeyLyricsAutoHide @"spotifyglass.redesign.lyrics.autoHide"
+// How long after the last touch: an index into SGRLyricsAutoHideDelays, 4 s (index 1) until one is picked.
+#define SGRKeyLyricsAutoHideDelay @"spotifyglass.redesign.lyrics.autoHideDelay"
+NSArray<NSString *> *SGRLyricsAutoHideDelays(void);
+// A scroll through the lines hides the controls at once, and the lines let go back to the line being sung
+// bring them back (PlayerLyrics.x). On until switched off, apart from the switch above.
+#define SGRKeyLyricsScrollHide @"spotifyglass.redesign.lyrics.scrollHide"
 
 // A volume slider under the controls (PlayerVolume.m), the system's: this iPhone's, or the Connect device's.
 // On until switched off. Placed by the footer's layout, between the controls (`controls`) and the footer row
@@ -98,11 +109,27 @@ void SGRPlayerLyricsChanged(void);
 BOOL SGRPlayerVolumeOn(void);
 // YES when the row shows; NO when it is off, has no controls to sit under or no room between them and the footer.
 BOOL SGRPlayerPlaceVolume(UIView *stack, UIView *controls, UIView *row, CGFloat margin);
+// Shows the slider the row should now: this iPhone's, the Connect device's, or none behind the landscape lyrics.
+void SGRPlayerVolumeRefresh(void);
+
+// Spotify Connect's own volume (PlayerConnectVolume.x), for the row while Spotify plays on another device. Spotify's
+// volume and device objects are remembered from its own first calls on them; until both are, it plays here.
+// Posted on the main queue when the Connect volume or the device playing changed, once SGRConnectVolumeObserve ran.
+extern NSString *const SGRConnectVolumeDidChangeNotification;
+// Adds the mod's observer to the objects seen so far; calling it again adds it only to ones seen since. YES once
+// both are observed.
+BOOL SGRConnectVolumeObserve(void);
+BOOL SGRConnectPlaysRemotely(void);
+// The device's volume, 0 to 1; NAN before Spotify's volume object has been seen.
+double SGRConnectVolume(void);
+// Sets it as Spotify's device picker does, at most every 0.12 s while a drag goes on; `final` (the finger lifted)
+// sends at once and once more 0.6 s later if the device has not taken it.
+void SGRConnectSetVolume(double volume, BOOL final);
 
 // Follow the cover (PlayerCoverAccent.x): the player's lit controls painted in the cover's color instead of the accent.
 // Off until switched on, read at launch. The cover's color (a gray one gives the accent back), and a paint of Spotify's
 // bottom stack, which the footer's layout asks for.
-#define SGRKeyPlayerFollowsCover @"spotifyglass.redesign.player.followsCover"
+#define SGRKeyPlayerFollowsCover SGRKeyAccentFollowsCover   // Kit/SGRAccent.h: the accent preset is the same switch
 BOOL SGRPlayerFollowsCover(void);
 void SGRPlayerSetCoverAccent(UIColor *cover);
 void SGRPlayerPaintCover(UIView *stack);
@@ -111,6 +138,8 @@ void SGRPlayerPaintCover(UIView *stack);
 // until switched off. Shown or put away by hand for the harness.
 #define SGRKeyLyricsLandscape @"spotifyglass.redesign.lyrics.landscape"
 void SGRPlayerShowLandscape(BOOL show);
+// The landscape lyrics' window is up.
+BOOL SGRPlayerLandscapeShowing(void);
 
 // The animated artwork follows the lyrics: blurred behind them (PlayerMotion.x).
 void SGRPlayerMotionLyricsChanged(void);
@@ -142,11 +171,47 @@ BOOL SGRPlayerVisualiserShowing(void);
 // (PlayerFooter.x), and when the ⋯ menu switches the background (PlayerMotion.x and here); cheap when nothing
 // changed.
 void SGRPlayerVisualiserUpdate(void);
-// A view of its own drawing the same hills, for the Player page's showcase. It moves only in a window.
+// A view of its own drawing the same, for the Player page's showcase. It moves only in a window.
 UIView *SGRPlayerVisualiserPreview(void);
+// A view drawing `shader` whatever the setting says, for a tile of the Player page's picker.
+UIView *SGRPlayerVisualiserPreviewOf(NSString *shader);
+
+// How the Visualizer draws, all applying at once: the shader by identifier (SGRShaderSource.h: "hills", a built-in
+// one's, or "custom.<UUID>"), its Intensity in percent (25-200, 100 unset) and whether Low Power Mode slows it down
+// (on until switched off).
+#define SGRKeyVisualiserShader @"spotifyglass.redesign.player.visualiser.shader"
+#define SGRKeyVisualiserIntensity @"spotifyglass.redesign.player.visualiser.intensity"
+#define SGRKeyVisualiserLowPower @"spotifyglass.redesign.player.visualiser.lowPower"
+// Posted on the main thread when any of them, or a custom shader, changed; every Visualizer view follows it.
+extern NSNotificationName const SGRVisualiserSettingsDidChangeNotification;
+// The shader drawn: the stored one, Hills when none is stored or the stored one was deleted.
+NSString *SGRVisualiserShader(void);
+void SGRSetVisualiserShader(NSString *identifier);
+NSInteger SGRVisualiserIntensity(void);
+void SGRSetVisualiserIntensity(NSInteger percent);
+// Posts the notification, for a change made elsewhere (the Low Power switch, a custom shader saved or deleted).
+void SGRVisualiserSettingsChanged(void);
+// The Visualizer's part of the Player page (PlayerVisualiserSettings.m): the picker, a row of every shader with a
+// live tile each that scrolls sideways, its height, and the rows under it (SGModRow), shown while the Visualizer is
+// the background.
+UIView *SGRVisualiserPicker(void);
+CGFloat SGRVisualiserPickerHeight(void);
+NSArray *SGRVisualiserRows(void);
 // Switches the background to `kind` from the ⋯ menu, at once: Fluid, Animated or Visualizer, while it is one of
 // them (SGPlayerMenuOffersAnimatedArtwork); nothing otherwise.
 void SGRPlayerMenuSetBackground(SGRPlayerBackgroundKind kind);
+
+#pragma mark - the DJ (PlayerDJ.x)
+
+// The DJ plays in the redesigned player: Spotify's DJ mode stands aside while the redesign runs, so a DJ track
+// takes the music mode whose units the redesign styles, with the system ⋯ menu. On until switched off, read at launch.
+#define SGRKeyPlayerDJ @"spotifyglass.redesign.player.dj"
+// The DJ is playing (its own predicate on the player's state, else what its mode last answered).
+BOOL SGRPlayerDJPlaying(void);
+// NO while Spotify's DJ service has not been seen yet, so the ⋯ menu leaves its item out.
+BOOL SGRPlayerDJCanJump(void);
+// The DJ button's "switch it up": the DJ moves on to something else.
+void SGRPlayerDJJump(void);
 
 #pragma mark - Mod Settings (PlayerSettings.m)
 

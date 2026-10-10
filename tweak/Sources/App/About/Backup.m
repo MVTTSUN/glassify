@@ -55,12 +55,12 @@ void SGShareDiagnostics(void) {
     NSMutableString *text = [NSMutableString string];
     struct utsname machine;
     uname(&machine);
-    [text appendFormat:@"Vitrine %s, Spotify %@, iOS %@, %s\n", SG_VERSION,
+    [text appendFormat:@SG_NAME " %s, Spotify %@, iOS %@, %s\n", SG_VERSION,
         [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"unknown",
         UIDevice.currentDevice.systemVersion, machine.machine];
-    [text appendFormat:@"look %@, hide ads %d, hide upsells %d, spoof premium %d, EeveeSpotify %d\n\n",
+    [text appendFormat:@"look %@, hide ads %d, hide upsells %d, EeveeSpotify %d\n\n",
         SGRedesignedUIStored() ? @"redesign" : @"native", SGHidden(SGKeyHideAds), SGHidden(SGKeyHideUpsells),
-        SGHidden(SGKeyFakePremium), SGEeveeSpotifyInjected()];
+        SGEeveeSpotifyInjected()];
     [text appendString:@"== ads blocked (stopped of checked)\n"];
     for (NSString *label in SGAdBlockLabels()) {
         NSUInteger checked = SGAdBlockChecked(label);
@@ -82,12 +82,8 @@ void SGShareDiagnostics(void) {
     NSUInteger keep = MIN(lines.count, 1500);
     [text appendString:[[lines subarrayWithRange:NSMakeRange(lines.count - keep, keep)] componentsJoinedByString:@"\n"]];
     if (!lines.count) [text appendFormat:@"(none: %@)", error.localizedDescription ?: @"the log is empty"];
-    NSURL *caches = [NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject;
-    NSString *config = [NSString stringWithContentsOfURL:[caches URLByAppendingPathComponent:@"Vitrine/live-config.txt"]
-                                                encoding:NSUTF8StringEncoding error:nil];
-    [text appendFormat:@"\n\n== config Spotify's server last sent\n%@", config ?: @"(none yet: Spoof Premium is off, or no fetch so far)\n"];
 
-    NSURL *url = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:@"vitrine-diagnostics.txt"]];
+    NSURL *url = [NSURL fileURLWithPath:[NSTemporaryDirectory() stringByAppendingPathComponent:@"glassify-diagnostics.txt"]];
     [text writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil];
     UIViewController *top = SGTopController();
     UIActivityViewController *sheet = [[UIActivityViewController alloc] initWithActivityItems:@[url] applicationActivities:nil];

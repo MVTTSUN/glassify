@@ -73,7 +73,7 @@ BOOL SGLiveActivityAllowedByInstall(void) {
 static SGModRow *missingRow(void) {
     SGModRow *row = SGWarningRow(@"Missing from this install", @"Tap for why", ^{
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Live Activity is missing"
-            message:@"iOS shows a Live Activity only for an app that says it has one, and only Vitrine's IPA build writes that into Spotify. This Spotify was put together another way, such as with Vitrine's .deb injected by hand, so iOS turns the card down. Build the IPA with Vitrine to get it."
+            message:@"iOS shows a Live Activity only for an app that says it has one, and only Glassify's IPA build writes that into Spotify. This Spotify was put together another way, such as with Glassify's .deb injected by hand, so iOS turns the card down. Build the IPA with Glassify to get it."
             preferredStyle:UIAlertControllerStyleAlert];
         alert.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
         [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleCancel handler:nil]];

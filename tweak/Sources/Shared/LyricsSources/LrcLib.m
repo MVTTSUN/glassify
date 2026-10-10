@@ -15,7 +15,7 @@ static NSString *const kSearch = @"https://lrclib.net/api/search";
 static const NSInteger kLengthSlack = 4;
 
 static NSDictionary<NSString *, NSString *> *headers(void) {
-    return @{@"User-Agent": @"Vitrine " @SG_VERSION};
+    return @{@"User-Agent": @SG_NAME " " SG_VERSION};
 }
 
 // [00:34.30] Look — the timestamp in minutes, seconds and hundredths, or thousandths where a line

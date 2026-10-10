@@ -10,7 +10,7 @@
 #import "Core/SGCore.h"
 #import "About.h"
 
-NSString *const SGUpdateURL = @"https://api.github.com/repos/My-Name-Is-Jeff/vitrine/releases?per_page=100";
+NSString *const SGUpdateURL = sizeof(SG_REPO) > 1 ? @"https://api.github.com/repos/" SG_REPO "/releases?per_page=100" : nil;
 NSString *const SGUpdateCheckedNotification = @"spotifyglass.update.checked.notification";
 
 static NSString *const kChecked = @"spotifyglass.update.checked";

@@ -1,4 +1,8 @@
-<h1 align="center">Vitrine</h1>
+<p align="center">
+  <img src="icons/Glassify.png" width="96" alt="">
+</p>
+
+<h1 align="center">Glassify</h1>
 
 <p align="center">Spotify, in glass.</p>
 
@@ -28,8 +32,11 @@
 A no-jailbreak Theos tweak that rebuilds Spotify for iOS in Liquid Glass, injected into your own
 decrypted IPA and signed with your own certificate.
 
-Vitrine is a fork of [spoti.pw](https://github.com/skopevoj/spoti.pw) by Vojtěch Škopek, taken from
-0.21.1 (commit `c790445`, 2026-09-23), the last version released under GPL-3.0, and modified since.
+Glassify is a fork of [Vitrine](https://github.com/My-Name-Is-Jeff/vitrine), itself a fork of
+[spoti.pw](https://github.com/skopevoj/spoti.pw) by Vojtěch Škopek taken from 0.21.1 (commit `c790445`,
+2026-09-23), the last version released under GPL-3.0. Glassify takes out Spoof Premium (it never touches the
+account's product state), adds downloading a single song through Spotify's own offline download, and the
+features listed in `ROADMAP.md`. It keeps Vitrine's storage paths, so settings and downloads carry over.
 
 Built and tested on **Spotify 9.1.78** and **Spotify 9.1.88**. **Spotify 9.1.90** likely works too: it ran cleanly in a
 short test of the redesign, so report what breaks.

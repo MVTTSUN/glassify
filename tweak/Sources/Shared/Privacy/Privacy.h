@@ -23,6 +23,6 @@ void SGResetBlocked(void);
 
 @class SGModSection;
 // The telemetry and shared links switches and what the telemetry blocking has stopped, on the
-// Premium, ads & privacy page.
+// Ads & privacy page.
 SGModSection *SGPrivacySection(void);
 SGModSection *SGPrivacyCountersSection(void);

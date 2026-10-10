@@ -156,7 +156,7 @@ static const CGFloat kLogoRadius = 22;
 - (instancetype)initWithFrame:(CGRect)frame {
     if (!(self = [super initWithFrame:frame])) return nil;
     self.isAccessibilityElement = YES;
-    self.accessibilityLabel = @"Vitrine";
+    self.accessibilityLabel = @SG_NAME;
     self.accessibilityTraits = UIAccessibilityTraitImage;
 
     _pane = [UIView new];

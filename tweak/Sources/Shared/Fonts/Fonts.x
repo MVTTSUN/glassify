@@ -2,14 +2,18 @@
 // script in SpotifyShared's Fonts.bundle), the system's in one of its designs, or a font file imported from
 // Files (FontImport.m). Spotify asks for its fonts by name, so a name from its two families comes back as the
 // system font at the same size, with the weight its name ends in. The rounded, serif and monospaced designs
-// reach the system font too, so the mod's own text follows. An imported family and a family iOS carries
-// take its place at the same size, each weight as the family's nearest face. Read at launch.
+// reach the system font too, so the mod's own text follows. An imported family, a downloaded one and a family iOS
+// carries take its place at the same size, each weight as the family's nearest face, or for a variable font (most of
+// the downloads are) set on its weight axis. Read at launch.
 #import <CoreText/CoreText.h>
 #import "Core/SGCore.h"
 #import "Shared/Fonts/Fonts.h"
 
 static SGAppFont sg_font;
 static NSString *sg_family;   // the chosen family: one iOS carries, or the imported one once Core Text has it
+static BOOL sg_variable;      // the chosen family's upright face has a weight axis ('wght')
+
+static const uint32_t kWeightAxis = 0x77676874;   // 'wght'
 
 // A font name ("SpotifyMixUI-Bold") or family name ("Spotify Mix UI", which is how Spotify's text components ask) of
 // Spotify's: the family name has spaces, and matching only the font name left most of the app in Spotify's font.
@@ -24,7 +28,7 @@ static NSNumber *weightAsked(UIFontDescriptor *descriptor) {
     NSDictionary *attributes = descriptor.fontAttributes;
     NSNumber *trait = attributes[UIFontDescriptorTraitsAttribute][UIFontWeightTrait];
     if ([trait isKindOfClass:NSNumber.class]) return trait;
-    NSNumber *axis = attributes[(__bridge NSString *)kCTFontVariationAttribute][@(0x77676874)];   // 'wght'
+    NSNumber *axis = attributes[(__bridge NSString *)kCTFontVariationAttribute][@(kWeightAxis)];
     if (![axis isKindOfClass:NSNumber.class]) return nil;
     // CSS weights to UIFont's: 400 is regular (0), 700 bold (0.4), 900 black (0.62).
     double css = axis.doubleValue;
@@ -50,14 +54,35 @@ static UIFontDescriptorSystemDesign designOf(SGAppFont font) {
     }
 }
 
+// UIFont's weight as a CSS weight on a 'wght' axis, weightAsked's mapping turned around; Core Text holds it to the
+// axis's range.
+static double cssWeight(UIFontWeight weight) {
+    return weight <= 0 ? 400 + weight * 375 : weight <= 0.4 ? 400 + weight * 750 : 700 + (weight - 0.4) * 900;
+}
+
 // The family's upright face nearest the weight, so an italic file in the family never stands in for regular
-// text. Its name is not Spotify's, so the descriptor hook passes it through.
+// text; a variable one is set on its weight axis as well, since a single file has one face to match. Its name is
+// not Spotify's, so the descriptor hook passes it through.
 static UIFont *family(CGFloat size, UIFontWeight weight) {
-    UIFontDescriptor *descriptor = [UIFontDescriptor fontDescriptorWithFontAttributes:@{
+    NSMutableDictionary *attributes = [NSMutableDictionary dictionaryWithDictionary:@{
         UIFontDescriptorFamilyAttribute: sg_family,
         UIFontDescriptorTraitsAttribute: @{UIFontWeightTrait: @(weight), UIFontSlantTrait: @0},
     }];
-    return [UIFont fontWithDescriptor:descriptor size:size];
+    if (sg_variable) attributes[(__bridge NSString *)kCTFontVariationAttribute] = @{@(kWeightAxis): @(cssWeight(weight))};
+    return [UIFont fontWithDescriptor:[UIFontDescriptor fontDescriptorWithFontAttributes:attributes] size:size];
+}
+
+// Whether the family's regular face is a variable font with a weight axis.
+static BOOL weightAxisIn(NSString *name) {
+    CTFontDescriptorRef descriptor = CTFontDescriptorCreateWithAttributes((__bridge CFDictionaryRef)@{(id)kCTFontFamilyNameAttribute: name});
+    CTFontRef font = CTFontCreateWithFontDescriptor(descriptor, 17, NULL);
+    CFRelease(descriptor);
+    NSArray<NSDictionary *> *axes = font ? CFBridgingRelease(CTFontCopyVariationAxes(font)) : nil;
+    if (font) CFRelease(font);
+    for (NSDictionary *axis in axes) {
+        if ([axis[(__bridge NSString *)kCTFontVariationAxisIdentifierKey] unsignedIntValue] == kWeightAxis) return YES;
+    }
+    return NO;
 }
 
 static UIFont *designed(UIFont *font) {
@@ -145,7 +170,7 @@ static CGFloat fitScale(UIFontWeight weight) {
 
 SGAppFont SGAppFontChosen(void) {
     NSInteger font = SGInt(SGKeyAppFont, SGAppFontSpotify);
-    return font >= SGAppFontSpotify && font <= SGAppFontFamily ? font : SGAppFontSpotify;
+    return font >= SGAppFontSpotify && font <= SGAppFontDownloaded ? font : SGAppFontSpotify;
 }
 
 NSArray<NSString *> *SGAppFontNames(void) {
@@ -172,6 +197,14 @@ NSArray<NSString *> *SGAppFontFamilies(void) {
             return;
         }
     }
+    if (sg_font == SGAppFontDownloaded) {
+        NSString *name = [NSUserDefaults.standardUserDefaults stringForKey:SGKeyAppFontDownload];
+        sg_family = name ? SGRegisterDownloadedFont(name) : nil;
+        if (!sg_family) {
+            SGLog(@"fonts: the downloaded font %@ is not there, Spotify's stays", name);
+            return;
+        }
+    }
     if (sg_font == SGAppFontFamily) {
         NSString *name = [NSUserDefaults.standardUserDefaults stringForKey:SGKeyAppFontFamily];
         if (![SGAppFontFamilies() containsObject:name]) {
@@ -180,7 +213,8 @@ NSArray<NSString *> *SGAppFontFamilies(void) {
         }
         sg_family = name;
     }
+    sg_variable = sg_family && weightAxisIn(sg_family);
     %init;
     if (sg_font >= SGAppFontRounded) %init(Designs);
-    SGLog(@"fonts: %@ in place of Spotify's", sg_family ?: SGAppFontNames()[sg_font]);
+    SGLog(@"fonts: %@ in place of Spotify's%@", sg_family ?: SGAppFontNames()[sg_font], sg_variable ? @", on its weight axis" : @"");
 }

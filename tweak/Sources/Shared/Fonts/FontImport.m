@@ -9,14 +9,14 @@
 #import "Settings/SGPageStyle.h"
 #import "Shared/Fonts/Fonts.h"
 
-static NSURL *fontFolder(void) {
+NSURL *SGFontFolder(void) {
     NSURL *support = [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
     return [[support URLByAppendingPathComponent:@"Vitrine" isDirectory:YES] URLByAppendingPathComponent:@"Font" isDirectory:YES];
 }
 
 // The family name of every face in the file, "" for a face without one; empty when Core Text finds no font. A
 // collection gives one per face.
-static NSArray<NSString *> *familiesIn(NSURL *url) {
+NSArray<NSString *> *SGFontFamiliesIn(NSURL *url) {
     NSArray *faces = CFBridgingRelease(CTFontManagerCreateFontDescriptorsFromURL((__bridge CFURLRef)url));
     NSMutableArray<NSString *> *names = [NSMutableArray array];
     for (id face in faces) {
@@ -38,7 +38,7 @@ static void migrate(void) {
     NSUserDefaults *store = NSUserDefaults.standardUserDefaults;
     NSString *file = [store stringForKey:SGKeyAppFontFile];
     if (!file.length) return;
-    NSString *family = familiesIn([fontFolder() URLByAppendingPathComponent:file.lastPathComponent]).firstObject;
+    NSString *family = SGFontFamiliesIn([SGFontFolder() URLByAppendingPathComponent:file.lastPathComponent]).firstObject;
     if (family.length) {
         [store setObject:@[file] forKey:SGKeyAppFontFiles];
         [store setObject:family forKey:SGKeyAppFontName];
@@ -51,7 +51,7 @@ static NSArray<NSURL *> *storedFiles(void) {
     migrate();
     NSMutableArray<NSURL *> *urls = [NSMutableArray array];
     for (NSString *file in [NSUserDefaults.standardUserDefaults arrayForKey:SGKeyAppFontFiles]) {
-        NSURL *url = [fontFolder() URLByAppendingPathComponent:file.lastPathComponent];
+        NSURL *url = [SGFontFolder() URLByAppendingPathComponent:file.lastPathComponent];
         if ([NSFileManager.defaultManager fileExistsAtPath:url.path]) [urls addObject:url];
     }
     return urls;
@@ -105,13 +105,13 @@ static void import(NSArray<NSURL *> *picked) {
     BOOL fonts = YES;
     for (NSURL *url in picked) {
         if ([url startAccessingSecurityScopedResource]) [scoped addObject:url];
-        NSArray<NSString *> *names = familiesIn(url);
+        NSArray<NSString *> *names = SGFontFamiliesIn(url);
         fonts = fonts && names.count;
         [families addObjectsFromArray:names];
     }
     NSString *family = fonts ? SGFontSingleFamily(families) : nil;
     NSFileManager *files = NSFileManager.defaultManager;
-    NSURL *incoming = [fontFolder() URLByAppendingPathComponent:@"Incoming" isDirectory:YES];
+    NSURL *incoming = [SGFontFolder() URLByAppendingPathComponent:@"Incoming" isDirectory:YES];
     NSMutableArray<NSString *> *copied = [NSMutableArray array];
     if (family) {
         [files removeItemAtURL:incoming error:nil];
@@ -126,7 +126,7 @@ static void import(NSArray<NSURL *> *picked) {
     if (family && copied.count == picked.count) {
         removeImported();
         for (NSString *file in copied) {
-            NSURL *target = [fontFolder() URLByAppendingPathComponent:file];
+            NSURL *target = [SGFontFolder() URLByAppendingPathComponent:file];
             [files removeItemAtURL:target error:nil];
             [files moveItemAtURL:[incoming URLByAppendingPathComponent:file] toURL:target error:nil];
         }
@@ -202,16 +202,18 @@ static NSString *chosenLabel(void) {
     SGAppFont font = SGAppFontChosen();
     if (font == SGAppFontCustom) return importedFamily() ?: @"Your font";
     if (font == SGAppFontFamily) return [store stringForKey:SGKeyAppFontFamily] ?: SGAppFontNames()[0];
+    if (font == SGAppFontDownloaded) return [store stringForKey:SGKeyAppFontDownload] ?: SGAppFontNames()[0];
     return SGAppFontNames()[font];
 }
 
-typedef NS_ENUM(NSInteger, SGFontSection) { SGFontBuiltIn, SGFontMore, SGFontYours };
+typedef NS_ENUM(NSInteger, SGFontSection) { SGFontBuiltIn, SGFontMore, SGFontYours, SGFontDownload };
 
 @interface SGFontPage : SGPage
 @end
 
 @implementation SGFontPage {
     NSArray<NSString *> *_families;
+    NSArray<NSString *> *_downloads;
     UIView *_footer;
 }
 
@@ -219,6 +221,7 @@ typedef NS_ENUM(NSInteger, SGFontSection) { SGFontBuiltIn, SGFontMore, SGFontYou
     if (!(self = [super initWithStyle:UITableViewStyleInsetGrouped])) return nil;
     self.title = @"Font";
     _families = SGAppFontFamilies();
+    _downloads = SGDownloadableFonts();
     SGRegisterCustomFont();   // so the imported family can be drawn here, whichever font is chosen
     return self;
 }
@@ -228,6 +231,7 @@ typedef NS_ENUM(NSInteger, SGFontSection) { SGFontBuiltIn, SGFontMore, SGFontYou
     NSString *own = self.styleCount == 1
         ? @"A font of your own is a .ttf or .otf file from Files. This one has a single style, so bold text comes out regular. Pick all the files of a family together to keep bold. "
         : @"A font of your own comes from Files: a .ttf or .otf file, or all the files of one family picked together, so bold and italic stay. ";
+    own = [own stringByAppendingString:@"Download fetches a family from Google Fonts (SIL Open Font License) once, and it stays on this iPhone. "];
     _footer = SGNote([own stringByAppendingString:@"Text Spotify draws itself may keep its own font. Changes apply after you restart Spotify."]);
     self.tableView.tableFooterView = _footer;
 }
@@ -264,17 +268,19 @@ typedef NS_ENUM(NSInteger, SGFontSection) { SGFontBuiltIn, SGFontMore, SGFontYou
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)table {
-    return 3;
+    return 4;
 }
 
 - (NSInteger)tableView:(UITableView *)table numberOfRowsInSection:(NSInteger)section {
     if (section == SGFontBuiltIn) return (NSInteger)SGAppFontNames().count;
     if (section == SGFontMore) return (NSInteger)_families.count;
+    if (section == SGFontDownload) return (NSInteger)_downloads.count + (SGAnyFontDownloaded() ? 1 : 0);
     return self.importedName.length ? 2 : 1;
 }
 
 - (UIView *)tableView:(UITableView *)table viewForHeaderInSection:(NSInteger)section {
-    return section == SGFontBuiltIn ? nil : SGSectionHeader(table, section == SGFontMore ? @"More fonts" : @"Your fonts");
+    if (section == SGFontBuiltIn) return nil;
+    return SGSectionHeader(table, section == SGFontMore ? @"More fonts" : section == SGFontDownload ? @"Download" : @"Your fonts");
 }
 
 - (CGFloat)tableView:(UITableView *)table heightForHeaderInSection:(NSInteger)section {
@@ -297,6 +303,8 @@ typedef NS_ENUM(NSInteger, SGFontSection) { SGFontBuiltIn, SGFontMore, SGFontYou
         title = _families[(NSUInteger)path.row];
         font = previewFont(title, YES, size);
         selected = chosen == SGAppFontFamily && [title isEqualToString:[store stringForKey:SGKeyAppFontFamily]];
+    } else if (path.section == SGFontDownload) {
+        return [self downloadCell:cell row:path.row size:size];
     } else if (path.row == 0 && self.importedName.length) {
         title = self.importedName;
         font = previewFont(title, YES, size);
@@ -322,9 +330,99 @@ typedef NS_ENUM(NSInteger, SGFontSection) { SGFontBuiltIn, SGFontMore, SGFontYou
     return cell;
 }
 
+static void chooseDownloaded(NSString *name) {
+    [NSUserDefaults.standardUserDefaults setObject:name forKey:SGKeyAppFontDownload];
+    SGSetInt(SGKeyAppFont, SGAppFontDownloaded);
+}
+
+// A family of the catalog: drawn in itself once it is here, else in the app's font with what a download fetches, or
+// how far one has come. The last row, while any is here, deletes them all.
+- (UITableViewCell *)downloadCell:(UITableViewCell *)cell row:(NSInteger)row size:(CGFloat)size {
+    if (row >= (NSInteger)_downloads.count) {
+        SGFillCell(cell, @"Delete downloaded fonts", nil, SGRed(), nil);
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        cell.accessibilityTraits = UIAccessibilityTraitButton;
+        return cell;
+    }
+    NSString *name = _downloads[(NSUInteger)row];
+    NSString *family = SGFontDownloaded(name) ? SGRegisterDownloadedFont(name) : nil;
+    double progress = SGFontDownloadProgress(name);
+    NSString *subtitle = family ? nil : progress >= 0 ? [NSString stringWithFormat:@"Downloading… %.0f%%", progress * 100] : SGFontDownloadSize(name);
+    SGFillCell(cell, name, subtitle, nil, nil);
+    cell.selectionStyle = progress >= 0 ? UITableViewCellSelectionStyleNone : UITableViewCellSelectionStyleDefault;
+    UIFont *font = family ? previewFont(family, YES, size) : nil;
+    if (font) {
+        UIListContentConfiguration *content = (UIListContentConfiguration *)cell.contentConfiguration;
+        content.textProperties.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleBody] scaledFontForFont:font maximumPointSize:18];
+        cell.contentConfiguration = content;
+    }
+    BOOL selected = family && SGAppFontChosen() == SGAppFontDownloaded
+        && [name isEqualToString:[NSUserDefaults.standardUserDefaults stringForKey:SGKeyAppFontDownload]];
+    if (selected || (!family && progress < 0)) {
+        UIImageView *mark = SGSymbolView(selected ? @"checkmark" : @"arrow.down.circle", selected ? 13 : 17, UIImageSymbolWeightSemibold, selected ? 16 : 22);
+        mark.tintColor = SGGreen();
+        cell.accessoryView = mark;
+    }
+    cell.accessibilityTraits = selected ? UIAccessibilityTraitButton | UIAccessibilityTraitSelected : UIAccessibilityTraitButton;
+    return cell;
+}
+
+
+// The row of a family downloading, redrawn as each whole percent comes in while the page shows.
+- (void)showProgressOf:(NSString *)name {
+    NSUInteger row = [_downloads indexOfObject:name];
+    if (row == NSNotFound || !self.viewIfLoaded.window) return;
+    NSIndexPath *path = [NSIndexPath indexPathForRow:(NSInteger)row inSection:SGFontDownload];
+    if ([self.tableView.indexPathsForVisibleRows containsObject:path]) [self.tableView reloadRowsAtIndexPaths:@[path] withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (void)download:(NSString *)name {
+    __weak SGFontPage *page = self;
+    __block NSInteger shown = -1;
+    SGDownloadFont(name, ^(double fraction) {
+        NSInteger percent = (NSInteger)(fraction * 100);
+        if (percent == shown) return;
+        shown = percent;
+        [page showProgressOf:name];
+    }, ^(NSString *family) {
+        if (family) {
+            chooseDownloaded(name);   // the page may be gone by now
+            tell(@"Font downloaded", [NSString stringWithFormat:@"%@ becomes the app's font when Spotify starts again.", name], YES);
+        } else {
+            tell(@"Font not downloaded", [NSString stringWithFormat:@"%@ could not be downloaded. Check the connection and try again.", name], NO);
+        }
+        [page refresh];
+    });
+    [self showProgressOf:name];
+}
+
+- (void)confirmDeleteDownloads {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Delete downloaded fonts?"
+        message:@"Every downloaded family is removed from this iPhone. Spotify's font comes back if one of them is in use." preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    __weak SGFontPage *page = self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"Delete" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        SGDeleteDownloadedFont(nil);
+        [page refresh];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 - (void)tableView:(UITableView *)table didSelectRowAtIndexPath:(NSIndexPath *)path {
     [table deselectRowAtIndexPath:path animated:YES];
-    if (path.section == SGFontBuiltIn) {
+    if (path.section == SGFontDownload) {
+        if (path.row >= (NSInteger)_downloads.count) {
+            [self confirmDeleteDownloads];
+            return;
+        }
+        NSString *name = _downloads[(NSUInteger)path.row];
+        if (SGFontDownloadProgress(name) >= 0) return;
+        if (!SGFontDownloaded(name)) {
+            [self download:name];
+            return;
+        }
+        chooseDownloaded(name);
+    } else if (path.section == SGFontBuiltIn) {
         SGSetInt(SGKeyAppFont, path.row);
     } else if (path.section == SGFontMore) {
         [NSUserDefaults.standardUserDefaults setObject:_families[(NSUInteger)path.row] forKey:SGKeyAppFontFamily];
@@ -339,12 +437,15 @@ typedef NS_ENUM(NSInteger, SGFontSection) { SGFontBuiltIn, SGFontMore, SGFontYou
     [table reloadData];
 }
 
-// Swiping the imported family away deletes its files; Default comes back if it was the choice.
+// Swiping the imported family, or a downloaded one, away deletes its files; Default comes back if it was the choice.
 - (UISwipeActionsConfiguration *)tableView:(UITableView *)table trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)path {
-    if (path.section != SGFontYours || path.row != 0 || !self.importedName.length) return nil;
+    NSString *downloaded = path.section == SGFontDownload && path.row < (NSInteger)_downloads.count ? _downloads[(NSUInteger)path.row] : nil;
+    if (downloaded && !SGFontDownloaded(downloaded)) return nil;
+    if (!downloaded && (path.section != SGFontYours || path.row != 0 || !self.importedName.length)) return nil;
     UIContextualAction *delete = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive title:@"Delete"
         handler:^(UIContextualAction *action, UIView *view, void (^done)(BOOL)) {
-            removeImported();
+            if (downloaded) SGDeleteDownloadedFont(downloaded);
+            else removeImported();
             [self refresh];
             done(YES);
         }];

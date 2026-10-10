@@ -17,8 +17,12 @@
 // width, and every choice stays one tap away with the card showing it at once. A note under the control says what the
 // choice does; it is given the room of the longest note, so the rows under it hold still as it changes.
 //
+// While Visualizer is chosen the header ends in its picker, a tile of each shader drawing it live
+// (PlayerVisualiserSettings.m), and the card shows the one picked.
+//
 // Under the header: the rows that follow the choice (Animated's sources and its Low Data Mode switch; Fluid's
-// five sliders and their Reset, which the card and the player follow as they move, SGRFluid.h), the Mini
+// five sliders and their Reset, which the card and the player follow as they move, SGRFluid.h; the Visualizer's
+// Intensity, Reduce in Low Power Mode and Custom Shaders), the Mini
 // player section (Redesigned/NowPlayingBar/NowPlayingBarSettings.m), then the sections either look shares.
 //
 // Threading: main thread only.
@@ -44,7 +48,7 @@ static NSArray<NSString *> *backgroundNotes(void) {
         @"The cover's colors, drifting slowly.",
         @"The cover itself, blurred and slowly turning. It rests while a song is paused.",
         @"The song's Canvas or the album's moving cover, else Fluid. The player's ⋯ menu switches between this, Fluid and Visualizer.",
-        @"The song's sound as gentle hills in the cover's colors, over Fluid held still. They settle while a song is paused.",
+        @"The song's sound drawn in the cover's colors over Fluid held still, as hills or one of the styles below. It settles while a song is paused.",
     ];
 }
 
@@ -247,6 +251,7 @@ static NSArray<NSString *> *backgroundNotes(void) {
 @implementation SGRPlayerPage {
     UIView *_header;
     UILabel *_note;
+    UIView *_picker;
 }
 
 - (void)viewDidLoad {
@@ -259,6 +264,8 @@ static NSArray<NSString *> *backgroundNotes(void) {
     _note.textColor = SGGrey();
     _note.numberOfLines = 0;
     [_header addSubview:_note];
+    _picker = SGRVisualiserPicker();
+    [_header addSubview:_picker];
     [self showNote];
     self.tableView.tableHeaderView = _header;
 }
@@ -293,7 +300,20 @@ static NSArray<NSString *> *backgroundNotes(void) {
     CGFloat noteHeight = ceil([_note sizeThatFits:CGSizeMake(noteWidth, CGFLOAT_MAX)].height);
     CGFloat noteTop = CGRectGetMaxY(self.backgrounds.frame) + 8;
     _note.frame = CGRectMake(inset + 4, noteTop, noteWidth, noteHeight);
-    CGSize size = CGSizeMake(width, noteTop + room);
+    // The Visualizer's picker under the note, its tiles from the cards' edge and scrolling out to the page's.
+    BOOL picking = SGRPlayerBackground() == SGRPlayerBackgroundVisualiser;
+    CGFloat bottom = noteTop + room;
+    _picker.hidden = !picking;
+    if (picking) {
+        _picker.frame = CGRectMake(0, bottom + 12, width, SGRVisualiserPickerHeight());
+        UIScrollView *scroll = (UIScrollView *)_picker;
+        if (scroll.contentInset.left != inset) {
+            scroll.contentInset = UIEdgeInsetsMake(0, inset, 0, inset);
+            scroll.contentOffset = CGPointMake(-inset, 0);
+        }
+        bottom = CGRectGetMaxY(_picker.frame) + 4;
+    }
+    CGSize size = CGSizeMake(width, bottom);
     if (CGSizeEqualToSize(_header.bounds.size, size)) return;
     _header.frame = (CGRect){CGPointZero, size};
     table.tableHeaderView = _header;
@@ -349,14 +369,21 @@ UIViewController *SGRPlayerSettingsPage(NSArray *more) {
     ];
     for (SGModRow *row in fluid) row.visible = ^BOOL { return SGRPlayerBackground() == SGRPlayerBackgroundFluid; };
 
+    NSArray<SGModRow *> *visualiser = SGRVisualiserRows();
+    for (SGModRow *row in visualiser) row.visible = ^BOOL { return SGRPlayerBackground() == SGRPlayerBackgroundVisualiser; };
+
     NSMutableArray<SGModSection *> *sections = [NSMutableArray arrayWithObjects:
         SGSection(nil, @[sources, lowData]),
+        SGNotedSection(nil, visualiser, @"Intensity sets how far the Visualizer moves. Bright styles are dimmed so the "
+                                        @"player's text stays readable. Low Power Mode draws fewer frames unless switched off here."),
         SGNotedSection(nil, fluid, @"Brightness above 100% can make white text harder to read. A paused song holds the "
                                    @"background still. Animated and Visualizer use these where they show Fluid."),
         SGNotedSection(@"Controls", @[SGSwitchRow(@"Volume", nil, SGRKeyPlayerVolume),
-                                      SGOptionRow(@"Follow the cover", nil, SGRKeyPlayerFollowsCover)],
+                                      SGOptionRow(@"Follow the cover", nil, SGRKeyPlayerFollowsCover),
+                                      SGSwitchRow(@"DJ", nil, SGRKeyPlayerDJ)],
                        @"Volume puts a slider under the controls for this iPhone, or the speaker's while Spotify plays on another device. "
-                       @"Follow the cover paints the like, shuffle and repeat in the color of the song playing."),
+                       @"Follow the cover paints the like, shuffle and repeat in the color of the song playing. "
+                       @"DJ plays the DJ in this player, with Switch It Up in its ⋯ menu; off, the DJ keeps Spotify's own player."),
         SGNotedSection(@"Mini player", SGRNowPlayingBarRows(),
                        @"Apple Music style moves the now playing bar in between two tabs as you scroll down."), nil];
     [sections addObjectsFromArray:more];

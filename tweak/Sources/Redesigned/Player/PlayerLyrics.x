@@ -52,8 +52,20 @@ static const NSTimeInterval kLyricsIn = 0.3, kLyricsInDelay = 0.12, kLyricsOut =
 static const NSTimeInterval kLyricsGrace = 3;
 // Below this the player has not laid out yet and nothing can be measured from it.
 static const CGFloat kLivingHeight = 200;
-// The lines on their own: the controls under them fade after this long without a touch.
-static const NSTimeInterval kRest = 4;
+// The lines on their own: the controls under them fade after this long without a touch, the choice stored
+// under SGRKeyLyricsAutoHideDelay (Lyrics page). Read at every start of the clock, so a pick applies at the next.
+static const NSTimeInterval kRests[] = {3, 4, 5, 8};
+static const NSInteger kRestDefault = 1;
+
+NSArray<NSString *> *SGRLyricsAutoHideDelays(void) {
+    return @[@"3 seconds", @"4 seconds", @"5 seconds", @"8 seconds"];
+}
+
+static NSTimeInterval restDelay(void) {
+    NSInteger index = SGInt(SGRKeyLyricsAutoHideDelay, kRestDefault);
+    NSInteger count = (NSInteger)(sizeof(kRests) / sizeof(kRests[0]));
+    return kRests[index >= 0 && index < count ? index : kRestDefault];
+}
 
 static char kOverlayKey, kPlateKey, kTitleKey, kStackKey;
 static BOOL sg_open;
@@ -64,6 +76,8 @@ static __weak UIView *sg_titleElement;      // the arranged element view holding
 static __weak UIViewController *sg_player;  // NowPlayingViewController, whose units the controls are
 static BOOL sg_alone;                       // the lines have the player to themselves
 static BOOL sg_touching;                    // a finger is on the player, which holds the clock (SGRPlayerTouchWatcher)
+static BOOL sg_browsed;                     // the lines were scrolled by hand with Hide controls while scrolling on
+static BOOL sg_paused;                      // the song was paused at the last state, so a pause is told from its repeats
 static NSTimer *sg_rest;
 static __weak UIGestureRecognizer *sg_wake; // on the player, on while alone: the tap that brings the controls back
 
@@ -309,18 +323,27 @@ static CGFloat thumbRadius(SGRLyricsLayout l, BOOL open) {
 
 #pragma mark - the lines on their own
 
-// After kRest without a touch while the song plays, the controls under the lines fade and the lines grow
-// down into their room, the way the Music app leaves its lyrics alone. The header row, the thumbnail and
-// the title row stay, so the song playing is still named, and stay Spotify's and the thumbnail's to touch.
-// The lines scroll as they always do and leave the controls hidden; a tap brings them back and is not a
-// seek. A pause brings them back and keeps them; VoiceOver, a sheet over the player and the app in the
-// background keep them up. A scroll through the lines hides them at once. Sing's mic stays with the lines,
-// and a touch on it is the mic's: it does not bring the controls back.
+// Two things leave the lines on their own, each a switch of the Lyrics page. After restDelay() without a
+// touch while the song plays (Hide controls after a few seconds), the controls under the lines fade and the
+// lines grow down into their room, the way the Music app leaves its lyrics alone. A scroll through the lines
+// (Hide controls while scrolling) does the same at once, with the same animation, paused or not; the stack
+// holds at the anchor it was taken at (SGRKaraokeView's browse anchor) while the room grows under the finger,
+// so the two never pull at the lines together. The header row, the thumbnail and the title row stay, so the
+// song playing is still named, and stay Spotify's and the thumbnail's to touch.
+//
+// The controls come back at a tap anywhere on the player but a line -- on the lines' room between them, or
+// where the controls were -- and, after a scroll, as the lines are let go back to the line being sung
+// (browsingEnded, kBrowseHold after the finger), so the stack glides home into the room the controls leave. A
+// tap on a line seeks, as with the controls up, and leaves them hidden: it is not the lines let go, and a seek
+// is what it asked for. A pause brings them back and keeps them until a scroll; VoiceOver, a sheet over the
+// player and the app in the background keep them up. Sing's mic stays with the lines, and a touch on it is
+// the mic's: it does not bring the controls back. The translate button goes and comes with the controls
+// (SGRKaraokeView's extrasHidden).
 //
 // The tap is a recognizer on the player that recognizes with any other, so the thumbnail's tap closes the
 // lyrics the same time it brings the controls back, and a button takes its own tap: UIKit gives a control
-// its tap over a tap recognizer above it. A drag or a second finger fails it. The lines' own tap, the one
-// that seeks, is off while they are alone, which holds whichever of the two would have finished first.
+// its tap over a tap recognizer above it. A drag or a second finger fails it. It takes no touch the lines
+// would answer (SGRKaraokeView's takesTapAt:), so a tap on a line is the lines' seek alone.
 
 // The controls under the lines: every view of Spotify's bottom stack but the title row and the chips (gone
 // while the lines are up), which is the progress bar, the buttons, the footer and a volume row where the
@@ -378,19 +401,6 @@ static CGRect aloneStage(UIView *host, SGRLyricsLayout l) {
                       CGRectGetMaxY(safe) - kLyricsBottom - CGRectGetMinY(l.stage));
 }
 
-// The lines' tap seeks, so it is off while they are alone. Back on a turn of the run loop later: the tap
-// that brought the controls back is still being handed round, and must not reach it.
-static void letLinesSeek(SGRPlayerLyricsOverlay *overlay, BOOL seek) {
-    void (^apply)(void) = ^{
-        if (seek == sg_alone) return;   // alone again since
-        for (UIGestureRecognizer *recognizer in overlay.lyrics.gestureRecognizers) {
-            if ([recognizer isKindOfClass:UITapGestureRecognizer.class]) recognizer.enabled = seek;
-        }
-    };
-    if (seek) dispatch_async(dispatch_get_main_queue(), apply);
-    else apply();
-}
-
 static void setAlone(BOOL alone, BOOL animated);
 
 // A sheet, a menu or an alert over the player: the top controller on screen is not one the player is drawn
@@ -427,7 +437,7 @@ static void restartRest(void) {
     [sg_rest invalidate];
     sg_rest = nil;
     if (!mayCount()) return;
-    sg_rest = [NSTimer scheduledTimerWithTimeInterval:kRest repeats:NO block:^(NSTimer *timer) {
+    sg_rest = [NSTimer scheduledTimerWithTimeInterval:restDelay() repeats:NO block:^(NSTimer *timer) {
         sg_rest = nil;
         if (mayRest()) setAlone(YES, YES);
         if (!sg_alone) restartRest();
@@ -502,10 +512,12 @@ static void restartRest(void) {
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)other {
     return YES;
 }
-// Sing's mic and its slider stay while the lines are alone, and a touch on them is theirs alone.
+// Sing's mic and its slider stay while the lines are alone, and a touch on them is theirs alone; so is a
+// touch on a line, which seeks, its meaning's bubble and the credit.
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)recognizer shouldReceiveTouch:(UITouch *)touch {
     for (UIView *v = touch.view; v; v = v.superview) {
         if ([v isKindOfClass:SGRSingButton.class]) return NO;
+        if ([v isKindOfClass:SGRKaraokeView.class]) return ![(SGRKaraokeView *)v takesTapAt:[touch locationInView:v]];
     }
     return YES;
 }
@@ -523,6 +535,7 @@ static void setAlone(BOOL alone, BOOL animated) {
     // lines' tap are given back even when the player can no longer be measured.
     if (alone && !l.ok) return;
     sg_alone = alone;
+    if (!alone) sg_browsed = NO;
     if (alone) {
         [sg_rest invalidate];
         sg_rest = nil;
@@ -543,7 +556,6 @@ static void setAlone(BOOL alone, BOOL animated) {
         fadeControls(alone);
     };
     sg_wake.enabled = alone;
-    if (overlay) letLinesSeek(overlay, !alone);
     if (animated) {
         SGRAnimateLayout(host, move, nil);
         // Going, the controls take their time, since nobody waits on them; coming back at a touch, they answer at
@@ -595,9 +607,21 @@ static void setOpen(BOOL open, BOOL animated) {
         overlay.cover.image = SGRNowPlayingArtwork(NULL, NULL);
         overlay.stage.alpha = 0;
         overlay.stage.transform = entering;
-        // Not under VoiceOver, which keeps the controls up, nor under a sheet.
+        // Not under VoiceOver, which keeps the controls up, nor under a sheet. Read at each scroll, as the
+        // clock reads its own switch at each start.
         overlay.lyrics.browsingBegan = ^{
-            if (!UIAccessibilityIsVoiceOverRunning() && !coveredBySheet()) setAlone(YES, YES);
+            if (!SGEnabled(SGRKeyLyricsScrollHide) || UIAccessibilityIsVoiceOverRunning() || coveredBySheet()) return;
+            sg_browsed = YES;
+            setAlone(YES, YES);
+        };
+        // Let go back to the line being sung: the controls come back if the scroll is what hid them or found
+        // them hidden, and the clock starts again for Hide controls after a few seconds.
+        overlay.lyrics.browsingEnded = ^{
+            if (!sg_browsed) return;
+            sg_browsed = NO;
+            if (!sg_alone) return;
+            setAlone(NO, YES);
+            restartRest();
         };
         // Spotify's cover goes the moment the redesign's own takes its place: the same picture at the
         // same size with the same corners, so there is nothing to see in the swap. Coming back it waits
@@ -794,14 +818,16 @@ static void replace(void) {
 }
 
 - (void)playerStateDidChange:(SPTPlayerState *)state {
-    // A pause brings the controls back and keeps them; playing again starts the clock.
+    // A pause brings the controls back and keeps them; playing again starts the clock. Only the pause itself
+    // does: the states a paused player still reports would take back a scroll's hiding as it happened.
     if (state.isPaused) {
-        setAlone(NO, YES);
+        if (!sg_paused) setAlone(NO, YES);
         [sg_rest invalidate];
         sg_rest = nil;
     } else if (!sg_rest && !sg_alone) {
         restartRest();
     }
+    sg_paused = state.isPaused;
     NSString *track = SGURIString(state.track.URI);
     if (!track || [track isEqualToString:_track]) return;
     _track = track;

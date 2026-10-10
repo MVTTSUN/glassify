@@ -7,6 +7,7 @@
 #import "Settings/SGPageStyle.h"
 #import "Pages.h"
 #import "Shared/ArtistBlock/ArtistBlock.h"
+#import "Shared/AutoMix/AutoMix.h"
 #import "Shared/Gestures/Gestures.h"
 #import "Shared/Lyrics/Lyrics.h"
 #import "Shared/LyricsMeanings/Meanings.h"
@@ -24,7 +25,7 @@
 #import "Redesigned/NowPlayingBar/NowPlayingBar.h"
 #import "Redesigned/Kit/SGRAccent.h"
 
-NSString *const SGRedesignedUIInfo = @"The newest version of Vitrine, leaning toward Apple Music's style. It is not compatible with the legacy look's settings.\n\nThe legacy look gives you more freedom, yet still looks like Spotify.";
+NSString *const SGRedesignedUIInfo = @"The newest version of " SG_NAME @", leaning toward Apple Music's style. It is not compatible with the legacy look's settings.\n\nThe legacy look gives you more freedom, yet still looks like Spotify.";
 
 // Below iOS 26 the redesign also needs SGKeyRedesignUntested (Core/SGUIMode.h): whoever calls this has
 // shown the warning. Turning it off takes that back, so turning it on again warns again.
@@ -94,7 +95,7 @@ UIViewController *SGAppearancePage(void) {
     SGModRow *icon = SGAppIconRow();
     if (icon) [everywhere addObject:icon];
     return [[SGModPage alloc] initWithTitle:@"Appearance" intro:SGRestartNote sections:@[
-        SGSection(nil, SGRedesignedUIStored() ? [SGRAppearanceRows() arrayByAddingObject:SGRHomeTopPicksRow()] : SGNativeAppearanceRows()),
+        SGSection(nil, SGRedesignedUIStored() ? [SGRAppearanceRows() arrayByAddingObjectsFromArray:SGRHomeAppearanceRows()] : SGNativeAppearanceRows()),
         SGSection(nil, everywhere),
     ] footer:nil];
 }
@@ -115,10 +116,17 @@ static UIViewController *lyricsPage(void) {
     SGModSection *timing = SGNotedSection(@"Timing", @[SGLyricsDelayRow()],
         @"Every line shows this much later than the song, for Bluetooth headphones that play a little behind the lyrics. Applies at once.");
     if (redesigned) {
+        // The player's controls go two ways, each its own switch; the delay waits on the second.
+        SGModRow *hideDelay = SGChoiceRow(@"Hide after", nil, SGRKeyLyricsAutoHideDelay, SGRLyricsAutoHideDelays(), 1);
+        hideDelay.waitsOn = SGRKeyLyricsAutoHide;
         [sections addObjectsFromArray:@[
             SGSection(@"Display", @[SGRLyricsTextSizesRow(), SGLyricsWordTimingRow(), SGLyricsRomanisedRow(),
-                SGSwitchRow(@"Hide the controls", @"A few seconds after the last touch, the lyrics take the whole player", SGRKeyLyricsAutoHide),
                 SGSwitchRow(@"Landscape lyrics", @"Turn the phone with the lyrics open", SGRKeyLyricsLandscape)]),
+            SGNotedSection(@"Player controls", @[
+                SGSwitchRow(@"Hide controls while scrolling", @"A scroll through the lyrics gives them the whole player", SGRKeyLyricsScrollHide),
+                SGSwitchRow(@"Hide controls after a few seconds", @"Without a touch while the song plays", SGRKeyLyricsAutoHide),
+                hideDelay],
+                @"A tap beside the lines or where the controls were brings them back, as do the lyrics going back to the line being sung. A tap on a line still plays from it."),
             timing,
             SGSection(@"Translation", @[SGLyricsTranslationLanguageRow(), SGTranslateEverySongRow(), SGGeminiKeyRow(), SGSavedTranslationsRow()]),
             SGSection(nil, @[SGLyricsMeaningsRow()]),
@@ -142,12 +150,16 @@ UIViewController *SGPlayerSettingsPage(void) {
     blocked.value = ^NSString *{
         return SGFlag(SGKeyArtistBlock, NO) ? @(SGBlockedArtists().count).stringValue : @"Off";
     };
+    // AutoMix is Spotify's own audio settings set per context, the same under either look.
+    SGModRow *automix = SGPageRow(@"AutoMix", ^UIViewController *{ return SGAutoMixSettingsPage(); });
+    automix.value = ^NSString *{ return SGAutoMixSummary(); };
     BOOL native = !SGRedesignedUIStored();
 
     // AirPods gestures, the lock screen widget and Vibrations have rows of their own on Mod Settings' main page.
     NSMutableArray<SGModSection *> *sections = [NSMutableArray arrayWithObject:SGSection(nil, @[
         SGWithTile(SGPageRow(@"Gestures", ^UIViewController *{ return SGGesturesSettingsPage(); }), @"hand.tap", UIColor.systemBlueColor),
         SGWithTile(blocked, @"person.crop.circle.badge.xmark", UIColor.systemRedColor),
+        SGWithTile(automix, @"arrow.triangle.merge", UIColor.systemOrangeColor),
     ])];
     if (native) {
         [sections addObject:SGSection(nil, @[

@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Glassify icon</title>
+<!--
+  Glassify's app icon in iOS 27's manner: distinct layers of Liquid Glass built into the artwork, sharp edges, no blur.
+  A field of colour, one pane of clear glass on it, four level bars as glass layers of their own over the pane, each layer
+  with the thin, still highlights iOS 27 keeps at the top and bottom edges.
+  Rendered at 1024 x 1024 by headless Chrome (icons/README.md). ?variant=midnight|green|aurora|daylight picks the palette
+  (midnight, black with Spotify's #1DB954 bars, by default).
+-->
+<style>
+  html, body { margin: 0; background: #000; }
+  canvas { display: block; width: 1024px; height: 1024px; }
+</style>
+<canvas id="c" width="1024" height="1024"></canvas>
+<script>
+const variants = {
+  green:    { field: ['#1ED760', '#1DB954'], pane: 'rgba(255,255,255,0.20)', lift: 'rgba(8,90,38,0.28)',  bar: ['rgba(255,255,255,0.98)', 'rgba(255,255,255,0.86)'] },
+  aurora:   { field: ['#7B61FF', '#5B3FD6'], pane: 'rgba(255,255,255,0.18)', lift: 'rgba(40,20,120,0.30)', bar: ['rgba(255,255,255,0.98)', 'rgba(255,255,255,0.86)'] },
+  midnight: { field: ['#1A1C20', '#0B0C0E'], pane: 'rgba(255,255,255,0.07)', lift: 'rgba(0,0,0,0.45)',     bar: ['rgba(30,215,96,1)', 'rgba(29,185,84,0.88)'] },
+  daylight: { field: ['#FFFFFF', '#EEF3EF'], pane: 'rgba(29,185,84,0.09)',  lift: 'rgba(20,110,50,0.10)', bar: ['rgba(30,215,96,1)', 'rgba(29,185,84,0.9)'] },
+};
+const v = variants[new URLSearchParams(location.search).get('variant')] || variants.midnight;
+const c = document.getElementById('c'), g = c.getContext('2d'), S = 1024;
+
+function rounded(x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+}
+
+// The field: the colour, barely shaded top to bottom so it is not dead flat.
+const field = g.createLinearGradient(0, 0, 0, S);
+field.addColorStop(0, v.field[0]); field.addColorStop(1, v.field[1]);
+g.fillStyle = field; g.fillRect(0, 0, S, S);
+
+// iOS 27's edge light: a hairline bright at the top, gone at the middle, softer again at the bottom, never blurred.
+function edgeLight(x, y, w, h, r, width, top, bottom) {
+  const light = g.createLinearGradient(0, y, 0, y + h);
+  light.addColorStop(0, `rgba(255,255,255,${top})`);
+  light.addColorStop(0.32, 'rgba(255,255,255,0)');
+  light.addColorStop(0.72, 'rgba(255,255,255,0)');
+  light.addColorStop(1, `rgba(255,255,255,${bottom})`);
+  rounded(x + width / 2, y + width / 2, w - width, h - width, r - width / 2);
+  g.lineWidth = width; g.strokeStyle = light; g.stroke();
+}
+
+// A layer's separation from the one under it: a crisp offset of the field's darker tone, not a blurred shadow.
+function lift(x, y, w, h, r, dy, color) {
+  rounded(x, y + dy, w, h, r);
+  g.fillStyle = color; g.fill();
+}
+
+// The pane: clear glass, a light tint, its edges lit.
+const P = { x: 200, y: 200, w: 624, h: 624, r: 168 };
+lift(P.x, P.y, P.w, P.h, P.r, 10, v.lift);
+rounded(P.x, P.y, P.w, P.h, P.r);
+g.fillStyle = v.pane; g.fill();
+edgeLight(P.x, P.y, P.w, P.h, P.r, 5, 0.9, 0.45);
+
+// Four level bars, each its own glass layer over the pane: nearly opaque, a touch clearer at its foot, edges lit.
+const heights = [204, 348, 268, 148], bw = 66, gap = 42;
+const total = heights.length * bw + (heights.length - 1) * gap;
+let x = S / 2 - total / 2;
+for (const h of heights) {
+  const y = S / 2 - h / 2;
+  lift(x, y, bw, h, bw / 2, 7, v.lift);
+  const fill = g.createLinearGradient(0, y, 0, y + h);
+  fill.addColorStop(0, v.bar[0]); fill.addColorStop(1, v.bar[1]);
+  rounded(x, y, bw, h, bw / 2);
+  g.fillStyle = fill; g.fill();
+  edgeLight(x, y, bw, h, bw / 2, 3, 1, 0.6);
+  x += bw + gap;
+}
+document.title = 'ready';
+</script>

@@ -330,7 +330,7 @@ static NSString *trimmed(NSString *text) {
 }
 
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-    return section == 0 ? @"Kept by Vitrine for this file. The file itself is not changed." : nil;
+    return section == 0 ? @"Kept by " SG_NAME @" for this file. The file itself is not changed." : nil;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {

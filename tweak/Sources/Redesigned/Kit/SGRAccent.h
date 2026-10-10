@@ -10,6 +10,10 @@
 
 UIColor *SGRAccentColor(void);   // nil while Spotify's own green is kept
 NSInteger SGRAccentRGB(void);    // the color in effect, 0xRRGGBB, Spotify's green included
+// Follow the cover, the accent preset that paints the player's lit controls in the cover's color
+// (Player/PlayerCoverAccent.x), the accent above staying for a gray cover and everywhere else. Its switch is
+// also the player's Controls row (SGRKeyPlayerFollowsCover). Off until picked, read at launch.
+#define SGRKeyAccentFollowsCover @"spotifyglass.redesign.player.followsCover"
 
 // Plain checkmark (SGRPlainCheck.x): a saved song's circled tick as a plain checkmark in the accent. Off until switched
 // on, read at launch.
