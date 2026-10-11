@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-beta.12](https://github.com/MVTTSUN/glassify/compare/v1.0.0-beta.11...v1.0.0-beta.12) (2026-10-11)
+
+
+### Features
+
+* the Live Activity matches the system's now playing, with Like, Karaoke and Translate in the Dynamic Island ([abd2ab1](https://github.com/MVTTSUN/glassify/commit/abd2ab11d05a03930a9a78cd5becb37ddca8f0b7))
+
+
+### Fixes
+
+* Top picks fits its row, Home's gaps match, Download Song shows, and the player closes onto the bar smoothly ([8e9989f](https://github.com/MVTTSUN/glassify/commit/8e9989f9677e1dc0b450cbfebb78928581e89800))
+
 ## [1.0.0-beta.11](https://github.com/MVTTSUN/glassify/compare/v1.0.0-beta.10...v1.0.0-beta.11) (2026-10-10)
 
 
