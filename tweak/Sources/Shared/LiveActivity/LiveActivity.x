@@ -387,6 +387,10 @@ static void runAction(NSString *action) {
         else if ([value isEqualToString:@"album"]) SGSetSleepTimer(SGSleepTimerEndOfAlbum, 0);
         else if ([value isEqualToString:@"add"]) SGSleepTimerAdd(15 * 60);
         else if (value.integerValue > 0) SGSetSleepTimer(SGSleepTimerAtTime, value.integerValue * 60);
+    } else if ([name isEqualToString:@"translation"]) {
+        // The Dynamic Island's translate button: the line's translation under it, or not, from the next update on.
+        SGSetEnabled(SGKeyLiveActivityTranslation, !SGFlag(SGKeyLiveActivityTranslation, NO));
+        result = @(SGFlag(SGKeyLiveActivityTranslation, NO));
     } else {
         SGLog(@"live activity: unknown action %@", action);
         return;

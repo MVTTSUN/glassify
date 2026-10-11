@@ -105,7 +105,8 @@ struct SGPlayQueuedTrackIntent: LiveActivityIntent {
     }
 }
 
-// A control menu action: tab:N, toggle, previous, next, shuffle, repeat, timer:15|30|60|track|album|add|cancel.
+// A control menu action: tab:N, toggle, previous, next, shuffle, repeat, timer:15|30|60|track|album|add|cancel,
+// translation (the line's translation shown or not).
 @available(iOS 17.0, *)
 struct SGLiveActivityActionIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Control menu action"

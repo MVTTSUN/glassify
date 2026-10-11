@@ -90,19 +90,44 @@ private struct Cover: View {
     }
 }
 
-// The compact and minimal Dynamic Island's leading view, which Apple Watch and CarPlay show too: the
-// cover, or a note before it is read.
-private struct Badge: View {
+// The compact and minimal Dynamic Island's leading view, which Apple Watch and CarPlay show too: the lyrics' own
+// mark, not the cover, so it is told apart at a glance from the system's now playing beside it, which shows the
+// cover already.
+private struct LyricsBadge: View {
     let state: State
     @Environment(\.accent) private var accent
 
     var body: some View {
-        if let image = coverImage(state) {
-            Cover(image: image, side: 22)
-        } else {
-            Image(systemName: "music.note")
-                .foregroundStyle(accent)
+        Image(systemName: "quote.bubble.fill")
+            .foregroundStyle(accent)
+    }
+}
+
+// The expanded island's buttons, under the lines: what the system's now playing has no button for. Each runs
+// a LiveActivityIntent inside Spotify (LiveActivityShared.swift), so the island stays up.
+private struct IslandActions: View {
+    let state: State
+    @Environment(\.accent) private var accent
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(intent: SGLikeIntent()) {
+                Image(systemName: "heart")
+            }
+            .frame(maxWidth: .infinity)
+            Button(intent: SGSingIntent(.toggle)) {
+                Image(systemName: "music.mic")
+            }
+            .frame(maxWidth: .infinity)
+            Button(intent: SGLiveActivityActionIntent("translation")) {
+                Image(systemName: "translate")
+            }
+            .frame(maxWidth: .infinity)
         }
+        .buttonStyle(.plain)
+        .font(.system(size: 17, weight: .semibold))
+        .foregroundStyle(accent)
+        .padding(.top, 6)
     }
 }
 
@@ -150,24 +175,22 @@ private func lyricsActivity<A: ActivityAttributes, Card: View>(
             .activitySystemActionForegroundColor(.white)
     } dynamicIsland: { context in
         DynamicIsland {
-            // The row beside the camera: a note, and the sleep timer or whether it plays.
+            // Beside the camera, as the system's now playing has it: the cover, and the sleep timer only while one runs.
             DynamicIslandExpandedRegion(.leading) {
-                Image(systemName: "music.note")
-                    .foregroundStyle(accentOf(context.state))
-                    .padding(.leading, 6)
+                if let image = coverImage(context.state) {
+                    Cover(image: image, side: 44)
+                        .padding(.leading, 6)
+                }
             }
             DynamicIslandExpandedRegion(.trailing) {
-                Group {
-                    if let end = runningTimer(context.state) {
-                        Countdown(end: end)
-                    } else {
-                        PlayingSymbol(state: context.state)
-                    }
+                if let end = runningTimer(context.state) {
+                    Countdown(end: end)
+                        .padding(.trailing, 6)
+                        .accented(context.state)
                 }
-                .padding(.trailing, 6)
-                .accented(context.state)
             }
             DynamicIslandExpandedRegion(.bottom) {
+                VStack(spacing: 0) {
                 Group {
                     if context.state.view == .panel {
                         Summary(state: context.state)
@@ -180,9 +203,15 @@ private func lyricsActivity<A: ActivityAttributes, Card: View>(
                 // The island is always black, whatever the card's tint.
                 .foregroundStyle(.white)
                 .accented(context.state)
+                ProgressBar(state: context.state)
+                    .padding(.horizontal, 4)
+                    .padding(.top, 8)
+                IslandActions(state: context.state)
+                    .accented(context.state)
+                }
             }
         } compactLeading: {
-            Badge(state: context.state)
+            LyricsBadge(state: context.state)
                 .accented(context.state)
         } compactTrailing: {
             Group {
@@ -195,7 +224,7 @@ private func lyricsActivity<A: ActivityAttributes, Card: View>(
             }
             .accented(context.state)
         } minimal: {
-            Badge(state: context.state)
+            LyricsBadge(state: context.state)
                 .accented(context.state)
         }
     }
@@ -267,11 +296,11 @@ private struct FamilyView: View {
                 }
                 ContentView(state: state, upNext: 3)
             }
-            ProgressBar(state: state)
+            ProgressBar(state: state, times: state.view != .panel)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, state.view == .panel ? 12 : 16)
-        .padding(.vertical, state.view == .panel ? 8 : 12)
+        .padding(.horizontal, state.view == .panel ? 12 : 18)
+        .padding(.vertical, state.view == .panel ? 8 : 14)
         // The tallest view, the menu's Queue, comes to 156 of the 160 points: 16 of padding, 32 of tabs, three
         // rows of at least 28 with 4 between, two gaps of 6 and the 4 point bar. Text at the accessibility sizes
         // would grow the rows past the clip, so it stops at the largest size before them, where a footnote
@@ -332,21 +361,55 @@ private struct ProgressRing: View {
 }
 
 // The track's progress, running by itself between two dates while it plays and held while it is paused.
+// The bar under the card, drawn like the system's now playing above it: a thicker bar of white over a dimmer track,
+// and with `times` the time played and the time left at its ends, ticking by themselves while it plays.
 private struct ProgressBar: View {
     let state: State
+    var times = false
+
+    private func clock(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
 
     var body: some View {
         if state.progressBar ?? true, let start = state.trackStart, let end = state.trackEnd, end > start {
-            Group {
-                if state.paused, let at = state.pausedAt {
-                    ProgressView(value: at)
-                } else {
-                    ProgressView(timerInterval: start...end, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+            HStack(spacing: 10) {
+                if times { played(start: start, end: end).frame(minWidth: 34, alignment: .leading) }
+                Group {
+                    if state.paused, let at = state.pausedAt {
+                        ProgressView(value: at)
+                    } else {
+                        ProgressView(timerInterval: start...end, countsDown: false) { EmptyView() } currentValueLabel: { EmptyView() }
+                    }
                 }
+                .progressViewStyle(.linear)
+                .tint(.white)
+                .scaleEffect(x: 1, y: 1.6, anchor: .center)
+                .frame(height: 6)
+                if times { left(start: start, end: end).frame(minWidth: 40, alignment: .trailing) }
             }
-            .progressViewStyle(.linear)
-            .tint(.white)
-            .frame(height: 4)
+            .font(.caption.weight(.medium).monospacedDigit())
+            .foregroundStyle(.white.opacity(0.6))
+        }
+    }
+
+    @ViewBuilder private func played(start: Date, end: Date) -> some View {
+        if state.paused, let at = state.pausedAt {
+            Text(clock(at * end.timeIntervalSince(start)))
+        } else {
+            Text(timerInterval: start...end, countsDown: false)
+        }
+    }
+
+    @ViewBuilder private func left(start: Date, end: Date) -> some View {
+        if state.paused, let at = state.pausedAt {
+            Text("−" + clock((1 - at) * end.timeIntervalSince(start)))
+        } else {
+            HStack(spacing: 0) {
+                Text("−")
+                Text(timerInterval: start...end, countsDown: true)
+            }
         }
     }
 }
@@ -372,9 +435,9 @@ private struct LyricsView: View {
     // The page's Text size; the scale factor below still keeps a long line inside the 160 point clip.
     private var lineFont: Font {
         switch state.textSize {
-        case 0: .headline
-        case 2: .title2
-        default: .title3
+        case 0: .subheadline
+        case 2: .title3
+        default: .body
         }
     }
 
@@ -401,13 +464,13 @@ private struct LyricsView: View {
     private var track: some View {
         VStack(alignment: edge, spacing: 2) {
             Text(state.title.isEmpty ? "♪" : state.title)
-                .font(lineFont.weight(.bold))
+                .font(lineFont.weight(.semibold))
                 .lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: frameEdge)
                 .direction(of: state.title)
             if !state.title.isEmpty, !state.artist.isEmpty {
                 Text(state.artist)
-                    .font(.subheadline.weight(.medium))
+                    .font(lineFont)
                     .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: frameEdge)
@@ -441,7 +504,7 @@ private struct LyricsView: View {
     private var line: some View {
         VStack(alignment: edge, spacing: 4) {
             Text(state.line)
-                .font(lineFont.weight(.bold))
+                .font(lineFont.weight(.semibold))
                 .lineLimit(2)
                 .minimumScaleFactor(0.7)
                 .multilineTextAlignment(centered ? .center : .leading)
@@ -458,7 +521,7 @@ private struct LyricsView: View {
             }
             if !state.nextLine.isEmpty {
                 Text(state.nextLine)
-                    .font(.subheadline.weight(.semibold))
+                    .font(lineFont)
                     .foregroundStyle(.white.opacity(0.6))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: frameEdge)
