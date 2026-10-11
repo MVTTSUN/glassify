@@ -154,6 +154,19 @@ static void relayout(UICollectionView *shelf) {
     });
 }
 
+// Marks the shelf's layout large or not and lays it out at once, so the measuring that follows sees its cards at the
+// size they are now drawn at; the headings look again later (relayout). The shelf never scrolls up and down: its cards
+// fit the height the page gives it.
+static void setLarge(UICollectionView *shelf, BOOL large) {
+    UICollectionViewLayout *layout = shelf.collectionViewLayout;
+    objc_setAssociatedObject(layout, &kLargeKey, large ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!large) objc_setAssociatedObject(layout, &kNaturalKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [layout invalidateLayout];
+    [shelf layoutIfNeeded];
+    shelf.alwaysBounceVertical = NO;
+    relayout(shelf);
+}
+
 %hook _TtC12Element_List18CollectionViewCell
 - (UICollectionViewLayoutAttributes *)preferredLayoutAttributesFittingAttributes:(UICollectionViewLayoutAttributes *)attributes {
     UICollectionViewLayoutAttributes *result = %orig;
@@ -169,39 +182,42 @@ static void relayout(UICollectionView *shelf) {
     if (!eligible) {
         // The top's place holds something else now (the feed came again): the next shelf measured takes it.
         if (index == sg_topIndex) sg_topIndex = NSIntegerMax;
-        // A shelf that was large and is too short now is drawn as Spotify draws it again.
+        // A cell reused from the large shelf still holds its layout marked: drawn as Spotify draws it, then measured
+        // again, so this section gets its own height and not the large one's (the gaps under small shelves).
         if (layout && objc_getAssociatedObject(layout, &kLargeKey)) {
-            NSNumber *natural = objc_getAssociatedObject(layout, &kNaturalKey);
-            objc_setAssociatedObject(layout, &kLargeKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            [layout invalidateLayout];
-            relayout((UICollectionView *)root);
-            if (natural) result.size = CGSizeMake(result.size.width, natural.doubleValue);
+            setLarge((UICollectionView *)root, NO);
+            result = %orig;
         }
         SGRHomeProbeEnd(SGRHomeProbeTopPicks, began);
         return result;
     }
     if (index < sg_topIndex) sg_topIndex = index;
     BOOL large = index == sg_topIndex, was = objc_getAssociatedObject(layout, &kLargeKey) != nil;
-    // The shelf's height as Spotify sizes it, from a measuring before it was large.
-    if (!was) objc_setAssociatedObject(layout, &kNaturalKey, @(result.size.height), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if (large != was) {
-        objc_setAssociatedObject(layout, &kLargeKey, large ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [layout invalidateLayout];
-        relayout((UICollectionView *)root);
+        // This measuring was of the cards at their old size. The height before is this section's own, never one
+        // kept from another section the cell showed.
+        CGFloat before = result.size.height;
+        setLarge((UICollectionView *)root, large);
+        result = %orig;
+        // Spotify's measuring may not follow the cards (a fixed height of its own): the large shelf then gets the
+        // heading and the cards scaled, so the cards never spill over the next section.
+        CGFloat scaled = round(kHeading + (before - kHeading) * kScale);
+        if (large && result.size.height < scaled - 1) result.size = CGSizeMake(result.size.width, scaled);
         static dispatch_once_t once;
         dispatch_once(&once, ^{
             UICollectionViewCompositionalLayout *compositional = [layout isKindOfClass:UICollectionViewCompositionalLayout.class] ? (UICollectionViewCompositionalLayout *)layout : nil;
-            SGLog(@"redesign home: top picks at %ld, %ld cards, its layout %@ (%@, %@)", (long)index, (long)cardsIn((UICollectionView *)root),
+            SGLog(@"redesign home: top picks at %ld, %ld cards, its layout %@ (%@, %@), %.0f -> %.0f tall", (long)index, (long)cardsIn((UICollectionView *)root),
                   NSStringFromClass(layout.class),
                   objc_getAssociatedObject(layout, &kWrappedKey) ? @"sized by a provider" : @"not made by a provider: left as it is",
-                  compositional.configuration.scrollDirection == UICollectionViewScrollDirectionHorizontal ? @"scrolls itself across: snaps" : @"its section scrolls across: pages");
+                  compositional.configuration.scrollDirection == UICollectionViewScrollDirectionHorizontal ? @"scrolls itself across: snaps" : @"its section scrolls across: pages",
+                  before, result.size.height);
         });
+    } else if (large) {
+        // Measured again while large: the height the shelf had when it was made large, as the cards are.
+        NSNumber *kept = objc_getAssociatedObject(layout, &kNaturalKey);
+        if (kept && result.size.height < kept.doubleValue - 1) result.size = CGSizeMake(result.size.width, kept.doubleValue);
     }
-    NSNumber *natural = objc_getAssociatedObject(layout, &kNaturalKey);
-    // Large, the natural height scaled; small again in a cell that was large, the natural height, since this measuring
-    // was of the cards still drawn large.
-    if (natural && large) result.size = CGSizeMake(result.size.width, round(kHeading + (natural.doubleValue - kHeading) * kScale));
-    else if (natural && was) result.size = CGSizeMake(result.size.width, natural.doubleValue);
+    if (large) objc_setAssociatedObject(layout, &kNaturalKey, @(result.size.height), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     SGRHomeProbeEnd(SGRHomeProbeTopPicks, began);
     return result;
 }

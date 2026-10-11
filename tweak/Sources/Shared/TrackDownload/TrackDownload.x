@@ -27,6 +27,16 @@ static void note(SPTOfflineManagerImplementation *manager) {
 }
 
 %hook SPTOfflineManagerImplementation
+// Set while the manager is made (9.1.90's initWithScheduler:offlineManager:syncManager:metadataModel: stores both), so
+// it is noted at launch, before anything of Spotify's asks it about a download.
+- (void)setScheduler:(id)scheduler {
+    note(self);
+    %orig;
+}
+- (void)setObserversByURL:(id)observers {
+    note(self);
+    %orig;
+}
 - (NSUInteger)availabilityForEntityWithURL:(NSURL *)url {
     note(self);
     return %orig;

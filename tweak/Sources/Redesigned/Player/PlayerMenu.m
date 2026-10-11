@@ -13,7 +13,7 @@
 //                             redesign's player has no room for, the DJ moving on to something else
 //     Download Song / Remove Download
 //                             Spotify's own offline download for this one song (Shared/TrackDownload), not its
-//                             album; offered once Spotify's offline manager has been seen and for songs only
+//                             album; for songs only, greyed until Spotify's offline manager has been seen
 //
 // The item says under its name what is not as Spotify plays it, so the menu reads as a settings summary.
 #import "Core/SGCore.h"
@@ -63,8 +63,15 @@ static UIAction *soundMenu(void) {
 // Download for the song alone; its state under the name while Spotify works on it.
 static UIAction *downloadItem(void) {
     NSString *uri = SGURIString(SGPlayerState().track.URI);
+    if (![uri hasPrefix:@"spotify:track:"]) return nil;
     SGTrackDownload state = SGTrackDownloadState(uri);
-    if (state == SGTrackDownloadUnavailable) return nil;
+    // Spotify's offline manager not seen yet: the item stays, greyed, saying what brings it.
+    if (state == SGTrackDownloadUnavailable) {
+        UIAction *waiting = [UIAction actionWithTitle:@"Download Song" image:symbol(@"arrow.down.circle") identifier:nil handler:^(UIAction *action) {}];
+        waiting.subtitle = @"Open any album or playlist once first";
+        waiting.attributes = UIMenuElementAttributesDisabled;
+        return waiting;
+    }
     if (state == SGTrackDownloadNone) {
         return [UIAction actionWithTitle:@"Download Song" image:symbol(@"arrow.down.circle") identifier:nil
                                  handler:^(UIAction *action) { SGTrackDownloadAdd(uri); }];

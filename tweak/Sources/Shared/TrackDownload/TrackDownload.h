@@ -10,7 +10,8 @@
 // handed a track URI instead.
 //
 // The manager is made deep in Spotify's dependency graph with C++ arguments, so it is not created here: it is the
-// instance Spotify uses, noted the first time Spotify asks it anything (any download button or offline badge does).
+// instance Spotify uses, noted as it is made (its -setScheduler: and -setObserversByURL:) or the first time Spotify asks it
+// anything (any download button or offline badge does).
 //
 // Threading: main thread only.
 #import <Foundation/Foundation.h>

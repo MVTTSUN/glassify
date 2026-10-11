@@ -68,6 +68,7 @@ static CGFloat screenRadius(void) {
 }
 
 @interface SGRPlayerMorph : NSObject
+@property (nonatomic, readonly) CGFloat cardTop;
 @end
 
 @implementation SGRPlayerMorph {
@@ -80,6 +81,12 @@ static CGFloat screenRadius(void) {
     CGColorRef _overlayColor;
     BOOL _coverHidden;
     BOOL _follows;   // 9.1.90: Spotify animates the player's frame and alpha, which the morph then only reads
+    CGFloat _lastT;  // the last progress applied, 0 the card and 1 the player
+}
+
+// Where the card's top is in the container: 9.1.90's player comes to rest on the card, not at the screen's foot.
+- (CGFloat)cardTop {
+    return _card.origin.y;
 }
 
 // 9.1.90's CompactOverlayTransition animates the player itself, so the morph follows where it is drawn.
@@ -141,6 +148,7 @@ static CGFloat screenRadius(void) {
     UIView *container = _container, *overlay = _overlay, *bar = _bar;
     if (!container || !overlay) return;
     t = MIN(1, MAX(0, t));
+    _lastT = t;
     _spotifyAlpha = overlay.alpha;
     _spotifyFrame = overlay.frame;
 
@@ -219,6 +227,22 @@ static CGFloat screenRadius(void) {
 
 - (void)tearDown {
     UIView *overlay = _overlay;
+    // 9.1.90, closing: the glass bar is put back under the sheet and the sheet and the flown cover fade into it,
+    // rather than the dark card giving way to the glass in one frame.
+    if (_follows && _lastT < 0.5) {
+        UIView *sheet = _sheet, *cover = _cover;
+        _sheet = nil;
+        _cover = nil;
+        _bar.hidden = NO;
+        [UIView animateWithDuration:0.18 delay:0 options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionBeginFromCurrentState
+                         animations:^{
+            sheet.alpha = 0;
+            cover.alpha = 0;
+        } completion:^(BOOL finished) {
+            [sheet removeFromSuperview];
+            [cover removeFromSuperview];
+        }];
+    }
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     overlay.layer.sublayerTransform = CATransform3DIdentity;
@@ -298,8 +322,12 @@ static const CFTimeInterval kGiveUp = 0.9;   // UIKit's presentation runs about 
         return;
     }
     CALayer *drawn = overlay.layer.presentationLayer ?: overlay.layer;
-    CGFloat y = drawn.frame.origin.y, height = container.bounds.size.height;
-    [self.morph apply:height > 0 ? 1 - y / height : 1];
+    // 1 with the player's top at the screen's, 0 with it at the card's: Spotify brings the player to rest there when
+    // it closes, short of the screen's foot, so a progress over the whole height left the sheet a sixth of the way
+    // open when Spotify was done, and it went in one frame (screen recording, 2026-10-11).
+    CGFloat y = drawn.frame.origin.y, rest = self.morph.cardTop;
+    if (rest <= 0) rest = container.bounds.size.height;
+    [self.morph apply:rest > 0 ? 1 - y / rest : 1];
     BOOL interactive = self.context.isInteractive;
     BOOL moving = overlay.layer.animationKeys.count > 0 || fabs(y - self.lastY) > 0.5 || interactive;
     self.lastY = y;
